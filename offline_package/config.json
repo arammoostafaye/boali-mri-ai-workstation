@@ -1,0 +1,20 @@
+{
+  "application": "Boali MRI AI Workstation",
+  "version": "1.0.0",
+  "developer": "Aram Mostafaei",
+  "organization": "Kurdistan University of Medical Sciences - Boali Hospital Marivan",
+  "department": "Department of Medical Imaging & MRI",
+  "pacs": {
+    "lan_server": "http://192.168.11.201",
+    "wan_server": "https://marivan-pacs-boali.muk.ac.ir",
+    "session_ttl_hours": 12,
+    "parallel_workers": 4
+  },
+  "modules": [
+    "knee",
+    "shoulder",
+    "spine",
+    "hip",
+    "brain"
+  ]
+}

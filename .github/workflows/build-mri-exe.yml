@@ -1,0 +1,66 @@
+name: build-mri-exe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "opencv-python-headless>=4.8" "numpy>=1.24" "Pillow>=10" "pydicom>=2.4" "python-docx>=1.1" "cryptography>=41.0" pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          cd offline_package
+          pyinstaller --noconfirm --onedir --windowed --name "Boali_MRI_Workstation" --add-data "config.json;." --collect-all cv2 --collect-all docx --collect-all cryptography Boali_MRI_Workstation.py
+          if (Test-Path "launcher.bat") {
+              Copy-Item "launcher.bat" "dist\Boali_MRI_Workstation\" -Force
+          }
+
+      - name: Verify build and smoke test
+        run: |
+          $ErrorActionPreference = "Stop"
+          $d = "offline_package\dist\Boali_MRI_Workstation"
+          if (-not (Test-Path "$d\Boali_MRI_Workstation.exe")) { throw "exe missing" }
+          python -c "import sys; sys.path.insert(0,'offline_package'); import Boali_MRI_Workstation; print('MRI WORKSTATION IMPORT OK')"
+
+      - name: Pack zip
+        run: |
+          cd offline_package/dist
+          if (Get-Command 7z -ErrorAction SilentlyContinue) {
+              7z a -tzip -mx=4 ../../Boali_MRI_Workstation-Windows-x64.zip Boali_MRI_Workstation
+          } else {
+              Compress-Archive -Path Boali_MRI_Workstation -DestinationPath ../../Boali_MRI_Workstation-Windows-x64.zip -Force
+          }
+          cd ../..
+          certutil -hashfile Boali_MRI_Workstation-Windows-x64.zip SHA256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Boali_MRI_Workstation-Windows-x64
+          path: Boali_MRI_Workstation-Windows-x64.zip
+
+      - name: Publish to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Boali_MRI_Workstation-Windows-x64.zip
+            offline_package/launcher.bat

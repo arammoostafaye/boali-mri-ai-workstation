@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+pacs_temp_cache/
+pacs_session.json
+build/
+dist/
+*.spec
+.vscode/
+.idea/
