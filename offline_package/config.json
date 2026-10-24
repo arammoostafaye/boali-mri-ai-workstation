@@ -1,6 +1,6 @@
 {
   "application": "Boali MRI AI Workstation",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "developer": "Aram Mostafaei",
   "organization": "Kurdistan University of Medical Sciences - Boali Hospital Marivan",
   "department": "Department of Medical Imaging & MRI",
@@ -9,13 +9,6 @@
     "wan_server": "https://marivan-pacs-boali.muk.ac.ir",
     "session_ttl_hours": 12,
     "parallel_workers": 4
-  },
-  "ai_engine": {
-    "provider": "ollama",
-    "ollama_host": "http://localhost:11434",
-    "ollama_model": "llama3.2-vision",
-    "gemini_api_key": "",
-    "fallback_to_local_rules": true
   },
   "modules": [
     "knee",
