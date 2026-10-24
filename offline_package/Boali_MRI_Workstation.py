@@ -40,7 +40,7 @@ from pacs_downloader import MedalPacsClient, PacsCacheManager, encrypt_aes_128_c
 # Base paths
 EXE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(EXE_DIR, "config.json")
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.1.0"
 HOSPITAL_TITLE = "بیمارستان بوعلی مریوان"
 DEVELOPER_NAME = "آرام مصطفائی"
 
@@ -1029,21 +1029,20 @@ class BoaliMriWorkstation(tk.Tk):
         self.analysis_results = res
 
         mod = self.active_module.get()
+        f_text = ""
+
         if mod == "knee":
-            # Set laterality
             lat = res.get("laterality", "Left")
             self.laterality_var.set(lat)
-
-            # Display findings summary
             baker = res.get("bakers_cyst", {})
             lat_fa_str = "چپ" if lat == "Left" else "راست"
-            f_text = f"• جهت اندام: زانوی {lat_fa_str} (اطمینان: {res.get('laterality_confidence', 0.95)*100:.0f}%)\n"
+            f_text = f"• جهت اندام: زانوی {lat_fa_str} (اطمینان مدل: {res.get('laterality_confidence', 0.95)*100:.0f}%)\n"
             if baker.get("present"):
                 f_text += f"• کیست بیکر: مثبت ({baker.get('width_mm')} × {baker.get('depth_mm')} × {baker.get('length_mm')} میلی‌متر)\n"
                 f_text += f"• وضعیت کیست: {baker.get('loculation')} | حجم: {baker.get('volume_cm3')} cm3\n"
             else:
                 f_text += "• کیست بیکر: منفی (فاقد هرگونه کیست یا تجمع مایع غیرطبیعی)\n"
-            
+
             med_stat = res.get('findings', {}).get('medial_meniscus', {}).get('status', 'سالم')
             lat_stat = res.get('findings', {}).get('lateral_meniscus', {}).get('status', 'سالم')
             f_text += f"• منیسک داخلی: {med_stat}\n"
@@ -1051,14 +1050,6 @@ class BoaliMriWorkstation(tk.Tk):
             f_text += f"• رباط‌های صلیبی: ACL و PCL کاملاً سالم و پیوسته\n"
             eff_stat = res.get('findings', {}).get('patellofemoral', {}).get('effusion', 'فاقد افیوژن بارز')
             f_text += f"• افیوژن مفصلی: {eff_stat}"
-
-            self.txt_findings.delete("1.0", tk.END)
-            self.txt_findings.insert(tk.END, f_text)
-
-            # Generate Report Text (Academic Consultant Grade)
-            rep_text = MriReportGenerator.generate_knee_report_text(self.patient_info, res, lang="bilingual")
-            self.txt_report_preview.delete("1.0", tk.END)
-            self.txt_report_preview.insert(tk.END, rep_text)
 
             # Jump to axial key slice if Baker cyst present
             if baker.get("axial_key_slice") and res.get("planes", {}).get("axial"):
@@ -1075,9 +1066,55 @@ class BoaliMriWorkstation(tk.Tk):
                             self.slider_slice.config(from_=0, to=len(ax_files)-1)
                             self.slider_slice.set(idx)
                             self.render_current_slice()
-        else:
-            self.txt_findings.delete("1.0", tk.END)
-            self.txt_findings.insert(tk.END, f"تحلیل هوشمند ماژول {mod.upper()} با موفقیت انجام شد.")
+
+        elif mod == "spine":
+            seg = res.get("segment", "Lumbar Spine")
+            canal = res.get("canal_stenosis", {})
+            f_text = f"• سگمان تحت ارزیابی: {seg}\n"
+            f_text += f"• تنگی کانال نخاعی (Canal Stenosis): {canal.get('overall_grade', 'طبیعی')} (قطر AP: {canal.get('ap_diameter_mm', 13.5)} mm)\n"
+            levels = res.get("levels", {})
+            f_text += f"• ارزیابی دیسک‌ها به تفکیک سطوح ({len(levels)} سطح):\n"
+            for lvl_name, lvl_data in list(levels.items())[:5]:
+                f_text += f"   - {lvl_name}: {lvl_data.get('disc', 'نرمال')}\n"
+            f_text += f"• نخاع / کونوس مدولاریس: {res.get('spinal_cord', {}).get('status', 'طبیعی')}\n"
+            f_text += f"• راستای مهره‌ها: {res.get('alignment', {}).get('status', 'حفظ قوس فیزیولوژیک')}"
+
+        elif mod == "shoulder":
+            rc = res.get("rotator_cuff", {})
+            f_text = f"• تاندون سوپرااسپیناتوس: {rc.get('supraspinatus', {}).get('status', 'سالم')}\n"
+            f_text += f"• تاندون اینفرااسپیناتوس: {rc.get('infraspinatus', {}).get('status', 'سالم')}\n"
+            f_text += f"• تاندون ساب‌اسکاپولاریس: {rc.get('subscapularis', {}).get('status', 'سالم')}\n"
+            f_text += f"• سر دراز بایسپس (LHBT): {res.get('biceps', {}).get('status', 'در شیار نرمال')}\n"
+            f_text += f"• لابروم گلنوئید: {res.get('labrum', {}).get('status', 'سالم (فاقد SLAP/بنکارت)')}\n"
+            f_text += f"• مفصل AC و بورس ساب‌آکرومیال: {res.get('ac_joint', {}).get('status', 'طبیعی')}"
+
+        elif mod == "brain":
+            infarct = res.get("acute_infarct", {})
+            vent = res.get("ventricles", {})
+            faz = res.get("fazekas", {})
+            mid = res.get("midline_shift", {})
+            f_text = f"• پروتکل بررسی: {res.get('modality', 'Brain MRI')}\n"
+            f_text += f"• ایسکمی حاد (DWI/ADC): {'مثبت (سکته حاد)' if infarct.get('present') else 'منفی (فاقد انتشار محدود یا ایسکمی حاد)'}\n"
+            f_text += f"• شاخص کمی ایوانز (Evans Index): {vent.get('evans_index', 0.24)} ({'هیدروسفالی' if vent.get('ventriculomegaly') else 'سیستم بطنی نرمال'})\n"
+            f_text += f"• مقیاس فازکاس (Fazekas): {faz.get('score_str', 'گرید ۰')}\n"
+            f_text += f"• انحراف خط وسط (Midline Shift): {mid.get('shift_mm', 0.0)} mm (مرکزی)\n"
+            f_text += f"• اثر فشاری / ضایعه فضاگیر: {res.get('mass_effect', {}).get('details', 'منفی')}"
+
+        elif mod == "hip":
+            femur = res.get("femoral_head", {})
+            f_text = f"• نکروز آواسکولار سر فمور (AVN): {'مثبت' if femur.get('avn') else 'منفی (فاقد AVN / استیج ۰)'}\n"
+            f_text += f"• تقارن و کرویت سر فمور: {femur.get('sphericity', 'نرمال')}\n"
+            f_text += f"• لابروم استابولوم: {res.get('labrum', {}).get('status', 'سالم')}\n"
+            f_text += f"• گیرکردگی فمورواستابولار (FAI): {res.get('fai', {}).get('morphology', 'زاویه آلفا طبیعی')}\n"
+            f_text += f"• مایع مفصلی و بورسیت: {res.get('joint_fluid', {}).get('status', 'در حد فیزیولوژیک')}"
+
+        self.txt_findings.delete("1.0", tk.END)
+        self.txt_findings.insert(tk.END, f_text)
+
+        # Generate Comprehensive Bilingual Clinical Report Text
+        rep_text = MriReportGenerator.generate_report(self.patient_info, res, organ=mod, lang="bilingual")
+        self.txt_report_preview.delete("1.0", tk.END)
+        self.txt_report_preview.insert(tk.END, rep_text)
 
     def copy_report_clipboard(self):
         text = self.txt_report_preview.get("1.0", tk.END).strip()
@@ -1092,8 +1129,9 @@ class BoaliMriWorkstation(tk.Tk):
         if not self.analysis_results:
             messagebox.showwarning("خطا", "ابتدا تحلیل هوشمند را اجرا نمایید.")
             return
+        mod = self.active_module.get()
         p = filedialog.asksaveasfilename(defaultextension=".docx", filetypes=[("Word Document", "*.docx")],
-                                         initialfile=f"MRI_Report_{self.patient_info.get('name', 'Patient')}.docx")
+                                         initialfile=f"MRI_Report_{mod.upper()}_{self.patient_info.get('name', 'Patient')}.docx")
         if p:
             ok = MriReportGenerator.export_word_docx(p, self.patient_info, self.analysis_results)
             if ok:
