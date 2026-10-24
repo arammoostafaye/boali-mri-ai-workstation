@@ -160,42 +160,33 @@ class KneeMriEngine:
     def classify_series_planes(cls, series_map):
         """
         Classifies series into planes: 'axial', 'sagittal', 'coronal'.
-        Uses aspect ratio, slice counts, and anatomical aspect heuristics.
+        Uses substring keywords, slice counts, and fat-suppression heuristics.
         """
         planes = {"axial": None, "sagittal": None, "coronal": None, "sagittal_pdfs": None, "coronal_pdfs": None}
         
         for sname, flist in series_map.items():
             if not flist:
                 continue
+            sn = sname.lower()
             count = len(flist)
-            # Sample mid slice
-            mid_idx = count // 2
-            im = MriSeriesLoader.read_image_as_numpy(flist[mid_idx])
-            h, w = im.shape[:2]
 
-            # In Knee MRI:
-            # Series 1 is typically Scout / Localizer (<= 10 slices)
+            # Skip scouts with few slices
             if count < 10 and planes["axial"] is None:
                 continue
 
-            # Axial slices have rounded femoral condyle contours / cross-section
-            # Check horizontal vs vertical profile
-            aspect = w / float(h)
-            
-            # Identify Axial: cross-section of femoral condyles / patellofemoral groove
-            # Popliteal vessels in posterior center, patella anterior
-            if count >= 18 and planes["axial"] is None and (sname in ["2", "axial", "ax", "AX"]):
+            # Substring matching (handles 2_AX_PD_FS, AXIAL, TRA, etc.)
+            if any(w in sn for w in ["ax", "tra", "transverse", "axial"]) or sn == "2":
                 planes["axial"] = sname
-                continue
-
-            if sname in ["5", "sag", "SAG", "sag_t1"]:
-                planes["sagittal"] = sname
-            elif sname in ["6", "sag_pdfs", "SAG_PDFS", "sag_fs"]:
-                planes["sagittal_pdfs"] = sname
-            elif sname in ["4", "cor_pdfs", "COR_PDFS", "cor_fs"]:
-                planes["coronal_pdfs"] = sname
-            elif sname in ["3", "cor", "COR", "cor_t1"]:
-                planes["coronal"] = sname
+            elif any(w in sn for w in ["sag", "sagittal"]):
+                if any(w in sn for w in ["fs", "pdf", "t2", "stir", "6"]):
+                    planes["sagittal_pdfs"] = sname
+                elif not planes["sagittal"] or sn == "5":
+                    planes["sagittal"] = sname
+            elif any(w in sn for w in ["cor", "coronal"]):
+                if any(w in sn for w in ["fs", "pdf", "t2", "stir", "4"]):
+                    planes["coronal_pdfs"] = sname
+                elif not planes["coronal"] or sn == "3":
+                    planes["coronal"] = sname
 
         # Fallback assignments if exact names don't match
         all_keys = list(series_map.keys())
@@ -224,18 +215,18 @@ class KneeMriEngine:
             return "Left", 0.95  # Safe clinical default
 
         files = series_map[ax_key]
-        # Inspect inferior-most axial slices (first 1-6 slices)
-        check_slices = files[:min(6, len(files))]
+        # Inspect inferior cuts (depending on scan acquisition, inferior may be at end or start)
+        check_slices = files[-8:] if len(files) >= 8 else files
         left_fibula_score = 0
         right_fibula_score = 0
 
         for fpath in check_slices:
             img = MriSeriesLoader.read_image_as_numpy(fpath)
             h, w = img.shape[:2]
-            # Tibia is large bone in center. Fibula is smaller lateral bone.
+            # Tibia is large bone in center. Fibula is smaller posterolateral bone.
             # Look at bottom-left vs bottom-right quadrant
-            bl_quad = img[int(h*0.4):int(h*0.85), int(w*0.05):int(w*0.4)]
-            br_quad = img[int(h*0.4):int(h*0.85), int(w*0.6):int(w*0.95)]
+            bl_quad = img[int(h*0.4):int(h*0.85), int(w*0.05):int(w*0.45)]
+            br_quad = img[int(h*0.4):int(h*0.85), int(w*0.55):int(w*0.95)]
 
             # Fibular head shows distinct cortical rim and marrow
             if cv2 is not None:
@@ -248,13 +239,30 @@ class KneeMriEngine:
                 if contours_bl and any(300 < cv2.contourArea(c) < 5000 for c in contours_bl):
                     left_fibula_score += 1
 
+        # If no score found at end, check first slices (reverse slice acquisition)
+        if right_fibula_score == 0 and left_fibula_score == 0 and len(files) >= 8:
+            for fpath in files[:8]:
+                img = MriSeriesLoader.read_image_as_numpy(fpath)
+                h, w = img.shape[:2]
+                bl_quad = img[int(h*0.4):int(h*0.85), int(w*0.05):int(w*0.45)]
+                br_quad = img[int(h*0.4):int(h*0.85), int(w*0.55):int(w*0.95)]
+                if cv2 is not None:
+                    _, thresh_bl = cv2.threshold(bl_quad, 40, 255, cv2.THRESH_BINARY)
+                    _, thresh_br = cv2.threshold(br_quad, 40, 255, cv2.THRESH_BINARY)
+                    contours_bl, _ = cv2.findContours(thresh_bl, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    contours_br, _ = cv2.findContours(thresh_br, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if contours_br and any(300 < cv2.contourArea(c) < 5000 for c in contours_br):
+                        right_fibula_score += 1
+                    if contours_bl and any(300 < cv2.contourArea(c) < 5000 for c in contours_bl):
+                        left_fibula_score += 1
+
         if right_fibula_score >= left_fibula_score:
             return "Left", 0.98  # Fibula on right of image => Left Knee
         else:
             return "Right", 0.96
 
     @classmethod
-    def detect_bakers_cyst(cls, series_map, planes, laterality="Left"):
+    def detect_bakers_cyst(cls, series_map, planes=None, laterality="Left"):
         """
         Scans Axial and Sagittal PD-FS slices for hyperintense fluid collection
         in the posteromedial popliteal fossa (between semimembranosus and medial gastrocnemius).
@@ -274,76 +282,95 @@ class KneeMriEngine:
             "bounding_box_ax": None
         }
 
-        ax_key = planes.get("axial")
-        sag_fs_key = planes.get("sagittal_pdfs") or planes.get("sagittal")
-
-        if not ax_key or ax_key not in series_map:
-            return cyst_info
-
-        ax_files = series_map[ax_key]
-        # In a Left knee: posteromedial is bottom-left of image
-        # In a Right knee: posteromedial is bottom-right of image
-        max_fluid_area = 0
-        best_ax_file = None
-        best_bbox = None
-        positive_ax_slices = 0
-
-        # Pixel to mm calibration factor (standard Knee MRI FOV 160mm / 432px ~ 0.37 mm/px)
+        # Calibration factor (standard Knee MRI FOV 160mm / 432px ~ 0.37 mm/px)
         px_to_mm = 0.37
 
-        for fpath in ax_files:
-            img = MriSeriesLoader.read_image_as_numpy(fpath)
-            h, w = img.shape[:2]
-            
-            if laterality == "Left":
-                roi = img[int(h*0.5):int(h*0.95), int(w*0.02):int(w*0.45)]
-                offset_x, offset_y = int(w*0.02), int(h*0.5)
-            else:
-                roi = img[int(h*0.5):int(h*0.95), int(w*0.55):int(w*0.98)]
-                offset_x, offset_y = int(w*0.55), int(h*0.5)
+        # Priority search order: axial series first, then others
+        candidate_keys = []
+        if planes and planes.get("axial"):
+            candidate_keys.append(planes["axial"])
+        for k in series_map.keys():
+            if any(w in k.lower() for w in ["ax", "tra", "2"]) and k not in candidate_keys:
+                candidate_keys.append(k)
+        for k in series_map.keys():
+            if k not in candidate_keys:
+                candidate_keys.append(k)
 
-            # High signal in PD-FS / T2-FS indicates fluid
-            fluid_mask = roi > 175
-            area = np.sum(fluid_mask)
+        best_overall_area = 0
+        best_slice = None
+        best_bbox = None
+        positive_slices = 0
 
-            if area > 180:
-                positive_ax_slices += 1
-                if area > max_fluid_area:
-                    max_fluid_area = area
-                    best_ax_file = fpath
-                    # Find bounding box
-                    y_indices, x_indices = np.where(fluid_mask)
-                    if len(x_indices) > 0 and len(y_indices) > 0:
-                        min_x, max_x = np.min(x_indices), np.max(x_indices)
-                        min_y, max_y = np.min(y_indices), np.max(y_indices)
-                        best_bbox = (offset_x + min_x, offset_y + min_y, offset_x + max_x, offset_y + max_y)
+        for skey in candidate_keys:
+            flist = series_map.get(skey, [])
+            if len(flist) < 8:
+                continue
 
-        if max_fluid_area > 350 and positive_ax_slices >= 3:
+            # Verify Fat-Suppression on mid slice
+            mid_im = MriSeriesLoader.read_image_as_numpy(flist[len(flist)//2])
+            mh, mw = mid_im.shape[:2]
+            mean_rim = (np.mean(mid_im[:int(mh*0.15), :]) + np.mean(mid_im[int(mh*0.85):, :])) / 2.0
+            # If rim > 90, it's a T1 where all fat is bright, skip
+            if mean_rim > 90:
+                continue
+
+            cur_max_area = 0
+            cur_pos_count = 0
+            cur_best_slice = None
+            cur_bbox = None
+
+            for fpath in flist:
+                img = MriSeriesLoader.read_image_as_numpy(fpath)
+                h, w = img.shape[:2]
+
+                # Check both posteromedial quadrants (left and right) to be robust
+                roi_left = img[int(h*0.48):int(h*0.95), int(w*0.02):int(w*0.48)]
+                roi_right = img[int(h*0.48):int(h*0.95), int(w*0.52):int(w*0.98)]
+
+                f_left = np.sum(roi_left > 165)
+                f_right = np.sum(roi_right > 165)
+                f_max = max(f_left, f_right)
+
+                if f_max > 150:
+                    cur_pos_count += 1
+                    if f_max > cur_max_area:
+                        cur_max_area = f_max
+                        cur_best_slice = fpath
+                        target_roi = roi_left if f_left >= f_right else roi_right
+                        ox = int(w*0.02) if f_left >= f_right else int(w*0.52)
+                        oy = int(h*0.48)
+                        y_idx, x_idx = np.where(target_roi > 165)
+                        if len(x_idx) > 0 and len(y_idx) > 0:
+                            cur_bbox = (ox + int(np.min(x_idx)), oy + int(np.min(y_idx)),
+                                        ox + int(np.max(x_idx)), oy + int(np.max(y_idx)))
+
+            if cur_max_area > best_overall_area and cur_pos_count >= 3:
+                best_overall_area = cur_max_area
+                best_bbox = cur_bbox
+                best_slice = cur_best_slice
+                positive_slices = cur_pos_count
+
+        if best_overall_area > 250 and positive_slices >= 3:
             cyst_info["present"] = True
-            cyst_info["axial_key_slice"] = best_ax_file
+            cyst_info["axial_key_slice"] = best_slice
             cyst_info["bounding_box_ax"] = best_bbox
 
-            # Dimensions
             if best_bbox:
                 w_px = best_bbox[2] - best_bbox[0]
                 d_px = best_bbox[3] - best_bbox[1]
                 cyst_info["width_mm"] = round(w_px * px_to_mm, 1)
                 cyst_info["depth_mm"] = round(d_px * px_to_mm, 1)
             else:
-                cyst_info["width_mm"] = 22.0
-                cyst_info["depth_mm"] = 15.0
+                cyst_info["width_mm"] = 35.0
+                cyst_info["depth_mm"] = 22.0
 
-            # Longitudinal length from slice thickness (typically 3.5mm - 4.0mm)
-            cyst_info["length_mm"] = round(positive_ax_slices * 3.8, 1)
-
-            # Volume approximation: Ellipsoid = 4/3 * pi * a * b * c
+            cyst_info["length_mm"] = round(positive_slices * 3.8, 1)
             vol = (4.0 / 3.0) * math.pi * (cyst_info["width_mm"] / 20.0) * (cyst_info["depth_mm"] / 20.0) * (cyst_info["length_mm"] / 20.0)
             cyst_info["volume_cm3"] = round(vol, 1)
 
-            # Check internal septations (multiloculated)
-            if best_ax_file and cv2 is not None:
-                cyst_crop = MriSeriesLoader.read_image_as_numpy(best_ax_file)[best_bbox[1]:best_bbox[3], best_bbox[0]:best_bbox[2]]
-                # Edge detection inside fluid pool
+            # Check internal septations
+            if best_slice and cv2 is not None and best_bbox:
+                cyst_crop = MriSeriesLoader.read_image_as_numpy(best_slice)[best_bbox[1]:best_bbox[3], best_bbox[0]:best_bbox[2]]
                 edges = cv2.Canny(cyst_crop, 40, 100)
                 if np.sum(edges > 0) > 40:
                     cyst_info["loculation"] = "Multiloculated with thin internal septa"
@@ -351,16 +378,22 @@ class KneeMriEngine:
                     cyst_info["loculation"] = "Unilocular"
 
         # Check Sagittal key slice
+        sag_fs_key = planes.get("sagittal_pdfs") if planes else None
+        if not sag_fs_key:
+            for k in series_map.keys():
+                if any(w in k.lower() for w in ["sag", "6"]):
+                    sag_fs_key = k
+                    break
+
         if sag_fs_key and sag_fs_key in series_map:
             sag_files = series_map[sag_fs_key]
-            # Medial slices are at the tail end for Left knee
-            candidate_sag = sag_files[int(len(sag_files)*0.7):]
+            candidate_sag = sag_files[int(len(sag_files)*0.6):]
             max_sag_fluid = 0
             best_sag = None
             for sf in candidate_sag:
                 simg = MriSeriesLoader.read_image_as_numpy(sf)
                 sh, sw = simg.shape[:2]
-                post_fluid = np.sum((simg[int(sh*0.5):int(sh*0.95), int(sw*0.7):int(sw*0.98)]) > 175)
+                post_fluid = np.sum((simg[int(sh*0.5):int(sh*0.95), int(sw*0.65):int(sw*0.98)]) > 165)
                 if post_fluid > max_sag_fluid:
                     max_sag_fluid = post_fluid
                     best_sag = sf

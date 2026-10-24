@@ -40,7 +40,7 @@ from pacs_downloader import MedalPacsClient, PacsCacheManager, encrypt_aes_128_c
 # Base paths
 EXE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(EXE_DIR, "config.json")
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 HOSPITAL_TITLE = "بیمارستان بوعلی مریوان"
 DEVELOPER_NAME = "آرام مصطفائی"
 

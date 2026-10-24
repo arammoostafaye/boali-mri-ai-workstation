@@ -28,7 +28,7 @@ jobs:
       - name: Build with PyInstaller
         run: |
           cd offline_package
-          pyinstaller --noconfirm --onedir --windowed --name "Boali_MRI_Workstation" --add-data "config.json;." --collect-all cv2 --collect-all docx --collect-all cryptography Boali_MRI_Workstation.py
+          pyinstaller --noconfirm --onedir --windowed --name "Boali_MRI_Workstation" --add-data "config.json;." --collect-all cv2 --collect-all docx --collect-all cryptography --collect-all pydicom Boali_MRI_Workstation.py
           if (Test-Path "launcher.bat") {
               Copy-Item "launcher.bat" "dist\Boali_MRI_Workstation\" -Force
           }
