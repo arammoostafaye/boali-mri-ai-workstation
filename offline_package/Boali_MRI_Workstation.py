@@ -21,6 +21,9 @@ import os
 import sys
 import time
 import math
+import json
+import io
+import queue
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -36,7 +39,8 @@ from pacs_downloader import MedalPacsClient, PacsCacheManager, encrypt_aes_128_c
 
 # Base paths
 EXE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_VERSION = "1.0.0"
+CONFIG_PATH = os.path.join(EXE_DIR, "config.json")
+APP_VERSION = "1.0.1"
 HOSPITAL_TITLE = "بیمارستان بوعلی مریوان"
 DEVELOPER_NAME = "آرام مصطفائی"
 
@@ -45,13 +49,363 @@ C_CANVAS = "#0f172a"
 C_PANEL = "#1e293b"
 C_CARD = "#334155"
 C_BORDER = "#475569"
+C_HEADER = "#1e293b"
 C_TEXT_MAIN = "#f8fafc"
+C_TEXT_LIGHT = "#f1f5f9"
 C_TEXT_MUTED = "#94a3b8"
 C_BLUE = "#0284c7"
 C_CYAN = "#38bdf8"
 C_GREEN = "#10b981"
+C_GREEN_HOVER = "#059669"
 C_AMBER = "#f59e0b"
 C_RED = "#ef4444"
+C_SLATE = "#475569"
+
+
+def create_modern_button(parent, text, command, bg, hover_bg, fg="white",
+                         font=("Arial", 9, "bold"), padx=14, pady=6, relief=tk.FLAT, bd=0):
+    """Creates a modern flat button with responsive hover highlight."""
+    btn = tk.Button(parent, text=text, command=command, bg=bg, fg=fg,
+                    activebackground=hover_bg, activeforeground=fg,
+                    font=font, relief=relief, bd=bd, padx=padx, pady=pady,
+                    cursor="hand2", highlightthickness=0)
+
+    def on_enter(e):
+        btn.config(bg=hover_bg)
+
+    def on_leave(e):
+        btn.config(bg=bg)
+
+    btn.bind("<Enter>", on_enter)
+    btn.bind("<Leave>", on_leave)
+    return btn
+
+
+# -----------------------------------------------------------------------------
+# Medal PACS Staff Authentication Dialog (Boali Hospital Marivan)
+# -----------------------------------------------------------------------------
+class MedalPacsLoginDialog(tk.Toplevel):
+    """
+    Dedicated Staff Authentication Modal for Boali Hospital Medal PACS 2024.
+    Features:
+    - ASP.NET ViewState + 5-digit CAPTCHA challenge processing
+    - Live graphical CAPTCHA preview with 1-click refresh
+    - Username credential persistence across sessions
+    - Pure-Python AES-128-CBC client-side encryption matching Medal PACS source
+    - Thread-safe queue communication preventing UI lockup
+    """
+    def __init__(self, parent_modal, on_success_callback=None):
+        super().__init__(parent_modal)
+        self.modal = parent_modal
+        self.pacs_client = parent_modal.pacs_client
+        self.on_success = on_success_callback
+        self.title("🔐 ورود پرسنلی به سامانه پکس مدال بیمارستان بوعلی مریوان")
+        self.geometry("520x570")
+        self.minsize(480, 520)
+        self.configure(bg=C_CANVAS)
+        self.transient(parent_modal)
+        self.grab_set()
+
+        self._queue = queue.Queue()
+        self.login_page_data = None
+        self._captcha_photo = None
+        self.is_loading_captcha = False
+
+        self.init_ui()
+        self._poll_queue()
+        self.after(60, self.load_captcha)
+
+    def _poll_queue(self):
+        try:
+            while True:
+                fn, args = self._queue.get_nowait()
+                fn(*args)
+        except queue.Empty:
+            pass
+        self.after(50, self._poll_queue)
+
+    def init_ui(self):
+        # Header Bar
+        header = tk.Frame(self, bg=C_HEADER, height=58)
+        header.pack(fill=tk.X, side=tk.TOP)
+
+        t_box = tk.Frame(header, bg=C_HEADER)
+        t_box.pack(side=tk.LEFT, padx=16, pady=8)
+        tk.Label(t_box, text="🔐 احراز هویت پرسنلی در پکس مدال",
+                 font=("Arial", 11, "bold"), fg=C_CYAN, bg=C_HEADER).pack(anchor=tk.W)
+        tk.Label(t_box, text=f"Medal PACS PRO 2024 | {HOSPITAL_TITLE} | {DEVELOPER_NAME}",
+                 font=("Arial", 8), fg=C_TEXT_MUTED, bg=C_HEADER).pack(anchor=tk.W, pady=(2, 0))
+
+        btn_close = create_modern_button(header, "✕", self.destroy,
+                                         bg=C_SLATE, hover_bg=C_RED, font=("Arial", 9, "bold"), padx=10, pady=2)
+        btn_close.pack(side=tk.RIGHT, padx=14, pady=12)
+
+        tk.Frame(self, bg=C_BORDER, height=1).pack(fill=tk.X)
+
+        body = tk.Frame(self, bg=C_CANVAS, padx=16, pady=12)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        # Server Info Card
+        srv_card = tk.Frame(body, bg=C_CARD, bd=1, relief=tk.SOLID, padx=12, pady=6)
+        srv_card.pack(fill=tk.X, pady=(0, 10))
+
+        curr_server = getattr(self.modal, "server_choice", None)
+        server_val = curr_server.get() if curr_server else "http://192.168.11.201"
+        tk.Label(srv_card, text=f"🖥️ سرور پکس هدف:  {server_val}",
+                 font=("Consolas", 9, "bold"), fg=C_CYAN, bg=C_CARD).pack(anchor=tk.W)
+        tk.Label(srv_card, text="پرسنل محترم واحد رادیولوژی: لطفاً نام کاربری، رمز عبور و کد ۵ رقمی سبز را وارد نمایید.",
+                 font=("Arial", 8), fg=C_TEXT_MUTED, bg=C_CARD).pack(anchor=tk.W, pady=(2, 0))
+
+        # Credentials Form Card
+        card = tk.Frame(body, bg=C_CARD, bd=1, relief=tk.SOLID, padx=14, pady=10)
+        card.pack(fill=tk.X, pady=(0, 10))
+
+        # 1. Username
+        tk.Label(card, text="👤 نام کاربری در پکس (Username):", font=("Arial", 9, "bold"),
+                 fg=C_TEXT_LIGHT, bg=C_CARD).pack(anchor=tk.W, pady=(0, 2))
+        self.ent_user = tk.Entry(card, bg="#0b1120", fg=C_TEXT_LIGHT, insertbackground=C_CYAN,
+                                 font=("Consolas", 10), bd=1, relief=tk.SOLID, highlightbackground=C_BORDER,
+                                 highlightthickness=1)
+        self.ent_user.pack(fill=tk.X, pady=(0, 8), ipady=3)
+        self.ent_user.bind("<Return>", lambda e: self.ent_pass.focus_set() if not self.ent_pass.get().strip() else (self.ent_captcha.focus_set() if not self.ent_captcha.get().strip() else self.do_login()))
+        saved_user = self._load_saved_username()
+        if saved_user:
+            self.ent_user.insert(0, saved_user)
+
+        # 2. Password
+        tk.Label(card, text="🔑 کلمه عبور در پکس (Password):", font=("Arial", 9, "bold"),
+                 fg=C_TEXT_LIGHT, bg=C_CARD).pack(anchor=tk.W, pady=(0, 2))
+        self.ent_pass = tk.Entry(card, bg="#0b1120", fg=C_TEXT_LIGHT, insertbackground=C_CYAN,
+                                 font=("Consolas", 10), show="●", bd=1, relief=tk.SOLID, highlightbackground=C_BORDER,
+                                 highlightthickness=1)
+        self.ent_pass.pack(fill=tk.X, pady=(0, 8), ipady=3)
+        self.ent_pass.bind("<Return>", lambda e: self.ent_captcha.focus_set() if not self.ent_captcha.get().strip() else self.do_login())
+
+        # 3. CAPTCHA Section
+        tk.Label(card, text="🔒 کد امنیتی ۵ رقمی (کپچا / Security Code):", font=("Arial", 9, "bold"),
+                 fg=C_CYAN, bg=C_CARD).pack(anchor=tk.W, pady=(0, 4))
+
+        cap_box = tk.Frame(card, bg="#0b1120", bd=1, relief=tk.SOLID, padx=10, pady=8)
+        cap_box.pack(fill=tk.X, pady=(0, 8))
+
+        # Left: Image display container
+        self.captcha_container = tk.Frame(cap_box, bg="#ffffff", bd=1, relief=tk.SOLID, width=175, height=52)
+        self.captcha_container.pack(side=tk.LEFT, padx=(0, 10))
+        self.captcha_container.pack_propagate(False)
+
+        self.lbl_captcha = tk.Label(self.captcha_container, text="در حال دریافت...", bg="#ffffff", fg="#475569",
+                                    font=("Arial", 8), cursor="hand2")
+        self.lbl_captcha.pack(expand=True, fill=tk.BOTH)
+        self.lbl_captcha.bind("<Button-1>", lambda e: self.load_captcha())
+
+        self.btn_refresh = create_modern_button(cap_box, "🔄 کد جدید", self.load_captcha,
+                                                bg="#1e293b", hover_bg=C_BLUE, font=("Arial", 8, "bold"),
+                                                padx=10, pady=6)
+        self.btn_refresh.pack(side=tk.LEFT, padx=(0, 12))
+
+        # Right: Captcha input directly adjacent
+        cap_sub = tk.Frame(cap_box, bg="#0b1120")
+        cap_sub.pack(side=tk.LEFT, fill=tk.Y)
+        tk.Label(cap_sub, text="ارقام سبز:", font=("Arial", 8, "bold"), fg=C_TEXT_MUTED, bg="#0b1120").pack(anchor=tk.W)
+        self.ent_captcha = tk.Entry(cap_sub, bg="#070d19", fg="#38bdf8", insertbackground=C_CYAN,
+                                    font=("Consolas", 14, "bold"), justify="center", width=8,
+                                    bd=1, relief=tk.SOLID, highlightbackground=C_BORDER, highlightthickness=1)
+        self.ent_captcha.pack(ipady=2)
+        self.ent_captcha.bind("<Return>", lambda e: self.do_login())
+
+        # Remember username checkbox
+        self.var_remember = tk.BooleanVar(value=True)
+        cb_rem = tk.Checkbutton(card, text="ذخیره نام کاربری برای ورودهای بعدی",
+                                variable=self.var_remember, bg=C_CARD, fg=C_TEXT_LIGHT,
+                                selectcolor="#0b1120", activebackground=C_CARD,
+                                activeforeground=C_CYAN, font=("Arial", 8))
+        cb_rem.pack(anchor=tk.W, pady=(4, 0))
+
+        # Status and Actions
+        self.lbl_status = tk.Label(body, text="آماده دریافت مشخصات ورود...",
+                                   font=("Arial", 8, "bold"), fg=C_CYAN, bg=C_CANVAS, anchor=tk.W)
+        self.lbl_status.pack(fill=tk.X, pady=(0, 8))
+
+        action_bar = tk.Frame(body, bg=C_CANVAS)
+        action_bar.pack(fill=tk.X)
+
+        self.btn_submit = create_modern_button(action_bar, "✅ ورود به پکس مدال (Login)", self.do_login,
+                                              bg=C_GREEN, hover_bg=C_GREEN_HOVER, font=("Arial", 9, "bold"),
+                                              padx=14, pady=6)
+        self.btn_submit.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.btn_web_login = create_modern_button(action_bar, "🌐 پرتال تحت وب", self.open_full_web_login,
+                                                 bg="#1e293b", hover_bg=C_BLUE, font=("Arial", 8),
+                                                 padx=8, pady=6)
+        self.btn_web_login.pack(side=tk.LEFT, padx=(0, 6))
+
+        btn_cancel = create_modern_button(action_bar, "✕ انصراف", self.destroy,
+                                          bg=C_SLATE, hover_bg=C_RED, font=("Arial", 8),
+                                          padx=12, pady=6)
+        btn_cancel.pack(side=tk.RIGHT)
+
+    def load_captcha(self):
+        if self.is_loading_captcha: return
+        self.is_loading_captcha = True
+        self.btn_refresh.config(state=tk.DISABLED)
+        self.lbl_status.config(text="در حال دریافت کپچای جدید از سرور پکس...", fg=C_CYAN)
+        self.lbl_captcha.config(image="", text="در حال بارگذاری...")
+
+        base = self.modal.server_choice.get() if hasattr(self.modal, "server_choice") else None
+
+        def worker(target_base):
+            try:
+                data = self.pacs_client.get_login_page_data(target_base)
+                self._queue.put((self._on_captcha_loaded, (data, None)))
+            except Exception as e:
+                self._queue.put((self._on_captcha_loaded, (None, str(e))))
+
+        threading.Thread(target=worker, args=(base,), daemon=True).start()
+
+    def _on_captcha_loaded(self, data, err):
+        self.is_loading_captcha = False
+        self.btn_refresh.config(state=tk.NORMAL)
+        if err or not data or not data.get("success", False):
+            msg = err or (data.get("error") if data else "خطای ناشناخته")
+            self.lbl_status.config(text=f"عدم دریافت کپچا: {msg[:60]}", fg=C_RED)
+            self.lbl_captcha.config(image="", text="خطا در دریافت\n(🔄 کلیک کنید)", fg="#ef4444")
+            return
+
+        self.login_page_data = data
+        raw_img = data.get("captcha_bytes")
+        if raw_img:
+            try:
+                im = Image.open(io.BytesIO(raw_img))
+                w, h = im.size
+                if h > 0:
+                    scale = 48.0 / h
+                    nw = int(w * scale)
+                    im = im.resize((nw, 48), Image.Resampling.LANCZOS)
+                self._captcha_photo = ImageTk.PhotoImage(im)
+                self.lbl_captcha.config(image=self._captcha_photo, text="")
+                self.lbl_status.config(text="کد امنیتی دریافت شد. لطفاً کد ۵ رقمی را وارد فرمایید.", fg=C_GREEN)
+                self.ent_captcha.delete(0, tk.END)
+                if not self.ent_user.get().strip():
+                    self.ent_user.focus_set()
+                elif not self.ent_pass.get().strip():
+                    self.ent_pass.focus_set()
+                else:
+                    self.ent_captcha.focus_set()
+            except Exception as ex:
+                self.lbl_captcha.config(image="", text="خطا در پردازش تصویر", fg="#ef4444")
+                self.lbl_status.config(text=f"خطا در باز کردن تصویر کپچا: {ex}", fg=C_RED)
+        else:
+            self.lbl_captcha.config(image="", text="کپچا نیاز نیست", fg="#64748b")
+            self.lbl_status.config(text="فرم ورود آماده است (بدون نیاز به کپچا).", fg=C_CYAN)
+
+    def do_login(self):
+        fa_ar_digits = "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩"
+        en_digits = "01234567890123456789"
+        digit_trans = str.maketrans(fa_ar_digits, en_digits)
+
+        user = self.ent_user.get().translate(digit_trans).strip()
+        pwd = self.ent_pass.get().strip()
+        cap = self.ent_captcha.get().translate(digit_trans).strip()
+        base = self.modal.server_choice.get() if hasattr(self.modal, "server_choice") else None
+
+        if not user:
+            messagebox.showwarning("نام کاربری", "لطفاً نام کاربری پرسنلی پکس را وارد فرمایید.", parent=self)
+            self.ent_user.focus_set()
+            return
+        if not pwd:
+            messagebox.showwarning("کلمه عبور", "لطفاً کلمه عبور پکس را وارد فرمایید.", parent=self)
+            self.ent_pass.focus_set()
+            return
+
+        has_captcha_img = bool(self.login_page_data and self.login_page_data.get("captcha_bytes"))
+        if has_captcha_img and not cap:
+            messagebox.showwarning("کد امنیتی", "لطفاً کد امنیتی ۵ رقمی نمایش داده شده در تصویر را وارد فرمایید.", parent=self)
+            self.ent_captcha.focus_set()
+            return
+
+        self.btn_submit.config(state=tk.DISABLED, bg=C_SLATE, text="در حال احراز هویت...")
+        self.lbl_status.config(text="در حال ارسال فرم ورود به پکس مدال...", fg=C_CYAN)
+
+        def worker(u, p, c, b):
+            try:
+                ok, msg = self.pacs_client.login_to_pacs(u, p, c, base_url=b, login_data=self.login_page_data)
+                self._queue.put((self._on_login_result, (ok, msg, u)))
+            except Exception as e:
+                self._queue.put((self._on_login_result, (False, str(e), u)))
+
+        threading.Thread(target=worker, args=(user, pwd, cap, base), daemon=True).start()
+
+    def _on_login_result(self, ok, msg, user):
+        self.btn_submit.config(state=tk.NORMAL, bg=C_GREEN, text="✅ ورود به پکس مدال (Login)")
+        if not ok:
+            self.lbl_status.config(text=f"ورود ناموفق: {msg[:70]}", fg=C_RED)
+            messagebox.showerror("خطای ورود به پکس مدال",
+                                 f"احراز هویت پرسنلی انجام نشد:\n\n{msg}\n\n"
+                                 f"لطفاً صحت نام کاربری، رمز عبور و کد امنیتی را بررسی نموده و مجدداً تلاش کنید.",
+                                 parent=self)
+            self.load_captcha()
+            return
+
+        # Success!
+        self.lbl_status.config(text=f"✓ ورود موفق! کاربر: {user}", fg=C_GREEN)
+        if self.var_remember.get():
+            self._save_username(user)
+
+        messagebox.showinfo("ورود موفقیت‌آمیز",
+                            f"احراز هویت پرسنلی در پکس مدال با موفقیت تایید شد.\n\n"
+                            f"نام کاربری: {user}\n"
+                            f"نشست فعال ذخیره گردید و ارتباط مستقیم با سرور پکس برقرار است.",
+                            parent=self)
+
+        if self.on_success:
+            self.on_success(user)
+        self.destroy()
+
+    def open_full_web_login(self):
+        curr_server = getattr(self.modal, "server_choice", None)
+        server_val = curr_server.get() if curr_server else "http://192.168.11.201"
+        login_url = f"{server_val.rstrip('/')}/MedalWeb/Login.aspx"
+
+        import subprocess, shutil, webbrowser
+        opened = False
+        for b_name in ["msedge", "chrome", "brave"]:
+            path = shutil.which(b_name)
+            if path:
+                try:
+                    subprocess.Popen([path, f"--app={login_url}", "--window-size=500,620"])
+                    opened = True
+                    break
+                except Exception:
+                    pass
+        if not opened:
+            webbrowser.open(login_url)
+
+        self.lbl_status.config(text="پنجره مستقیم پرتال پکس مدال باز گردید.", fg=C_GREEN)
+        if self.on_success:
+            self.on_success("پرتال مستقیم وب")
+
+    def _save_username(self, username):
+        try:
+            if os.path.exists(CONFIG_PATH):
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if "pacs_auth" not in data:
+                    data["pacs_auth"] = {}
+                data["pacs_auth"]["saved_username"] = username
+                with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _load_saved_username(self):
+        try:
+            if os.path.exists(CONFIG_PATH):
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return data.get("pacs_auth", {}).get("saved_username", "")
+        except Exception:
+            pass
+        return ""
 
 
 # -----------------------------------------------------------------------------
@@ -164,9 +518,15 @@ class MedalPacsModal(tk.Toplevel):
             self.lbl_auth_badge.config(text="⚪ ورود نکرده", fg="#f59e0b", bg="#1e293b")
             self.btn_login_modal.config(text="🔐 ورود به پکس", bg=C_BLUE)
 
-    def open_login_dialog(self):
-        # We can open the login modal
-        messagebox.showinfo("ورود به پکس", "جهت ورود به پکس مدال، از حساب پیش‌فرض یا اطلاعات کاربری خود استفاده فرمایید.")
+    def open_login_dialog(self, auto_retry_link=None):
+        def on_success(user):
+            self.pacs_client.save_session_to_disk()
+            self.update_auth_ui()
+            self.log(f"نشست پرسنلی پکس برای کاربر {user} فعال و تا ۱۲ ساعت ذخیره گردید.")
+            if auto_retry_link:
+                self.after(500, self.start_download_thread)
+
+        MedalPacsLoginDialog(self, on_success_callback=on_success)
 
     def start_download_thread(self):
         url = self.txt_url.get("1.0", tk.END).strip()
@@ -205,6 +565,19 @@ class MedalPacsModal(tk.Toplevel):
         self.btn_download.config(state=tk.NORMAL, bg=C_GREEN)
         self.lbl_status.config(text="خطا در ارتباط با سرور پکس")
         self.log(f"خطا: {err}")
+
+        # If PACS redirected to Login or requires staff authentication:
+        if any(w in err for w in ["نیازمند ورود", "Login", "نشست", "Session", "احراز هویت"]):
+            self.pacs_client.clear_saved_session()
+            self.update_auth_ui()
+            ans = messagebox.askyesno("ورود پرسنلی به پکس مدال",
+                                      "برای دسترسی و دانلود این پرونده، ورود به حساب پرسنلی پکس الزامی است.\n\n"
+                                      "آیا مایلید پنجره ورود به پکس باز شود؟",
+                                      parent=self)
+            if ans:
+                self.open_login_dialog(auto_retry_link=self.txt_url.get("1.0", tk.END).strip())
+            return
+
         messagebox.showerror("خطا در پکس", f"خطا در دریافت پرونده:\n{err}", parent=self)
 
 
