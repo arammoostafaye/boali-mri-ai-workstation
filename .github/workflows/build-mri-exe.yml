@@ -60,7 +60,7 @@ jobs:
       - name: Publish to Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.4' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.0.5' }}
           files: |
             Boali_MRI_Workstation-Windows-x64.zip
             offline_package/launcher.bat
