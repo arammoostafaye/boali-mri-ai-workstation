@@ -38,58 +38,88 @@ class MriSeriesLoader:
     """Loads, categorizes, and sorts multi-slice MRI image sequences."""
 
     @staticmethod
-    def load_series_from_directory(root_dir):
+    def is_medical_file(fpath):
+        """Checks if a file is a valid medical slice (DICOM or image), excluding metadata."""
+        if not os.path.isfile(fpath):
+            return False
+        if os.path.getsize(fpath) < 256:
+            return False
+        base = os.path.basename(fpath).lower()
+        if base in ["dicomdir", "thumbs.db", "desktop.ini"] or base.endswith((".xml", ".txt", ".json", ".zip", ".html", ".exe", ".dll", ".log", ".bat")):
+            return False
+        if base.endswith((".dcm", ".dicom", ".ima", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")):
+            return True
+        # Check DICOM magic 'DICM' at offset 128
+        try:
+            with open(fpath, "rb") as fh:
+                hdr = fh.read(132)
+                if len(hdr) >= 132 and hdr[128:132] == b"DICM":
+                    return True
+                if hdr.startswith(b"\xff\xd8\xff") or hdr.startswith(b"\x89PNG") or hdr.startswith(b"BM"):
+                    return True
+        except Exception:
+            pass
+        return True
+
+    @classmethod
+    def load_series_from_directory(cls, root_dir):
         """
-        Scans root_dir for MRI series folders or direct image files.
+        Recursively scans root_dir for MRI series folders or direct image files.
+        Handles flat directories, nested series directories, and DICOM series groupings.
         Returns a dictionary: { series_id: [list of sorted image paths] }
         """
         series_map = {}
         if not os.path.exists(root_dir):
             return series_map
 
-        # Check if root_dir has subdirectories (e.g. 1/, 2/, 3/, 4/, 5/, 6/)
-        subdirs = [os.path.join(root_dir, d) for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))]
-        if subdirs:
-            for sdir in sorted(subdirs):
-                sname = os.path.basename(sdir)
-                files = []
-                for fname in sorted(os.listdir(sdir)):
-                    ext = os.path.splitext(fname)[1].lower()
-                    if ext in [".jpg", ".jpeg", ".png", ".dcm", ".dicom", ".ima", ".bmp", ".tif", ".tiff"] or (len(fname) <= 12 and "." not in fname):
-                        files.append(os.path.join(sdir, fname))
-                if files:
-                    series_map[sname] = sorted(files, key=MriSeriesLoader._sort_key)
-        else:
-            # Flat directory
-            all_files = []
-            for fname in sorted(os.listdir(root_dir)):
-                fpath = os.path.join(root_dir, fname)
-                if os.path.isfile(fpath):
-                    ext = os.path.splitext(fname)[1].lower()
-                    if ext in [".jpg", ".jpeg", ".png", ".dcm", ".dicom", ".ima", ".bmp"] or (len(fname) <= 12 and "." not in fname):
-                        all_files.append(fpath)
+        folder_files = {}
+        all_med_files = []
+        for root, _, files in os.walk(root_dir):
+            m_files = []
+            for f in sorted(files):
+                fp = os.path.join(root, f)
+                if cls.is_medical_file(fp):
+                    m_files.append(fp)
+                    all_med_files.append(fp)
+            if m_files:
+                folder_files[root] = m_files
 
-            # Try grouping by DICOM SeriesNumber if pydicom available
-            grouped = False
-            if pydicom and all_files:
-                dcm_series = {}
-                for fp in all_files:
-                    try:
-                        ds = pydicom.dcmread(fp, stop_before_pixels=True)
-                        s_num = str(getattr(ds, "SeriesNumber", "1"))
-                        s_desc = getattr(ds, "SeriesDescription", "")
-                        label = f"{s_num}_{s_desc}" if s_desc else s_num
-                        dcm_series.setdefault(label, []).append(fp)
-                        grouped = True
-                    except Exception:
-                        dcm_series.setdefault("1", []).append(fp)
-                if grouped and len(dcm_series) > 1:
-                    for sk, fl in dcm_series.items():
-                        series_map[sk] = sorted(fl, key=MriSeriesLoader._sort_key)
+        if not folder_files:
+            return series_map
 
-            if not series_map and all_files:
-                series_map["1"] = sorted(all_files, key=MriSeriesLoader._sort_key)
+        # If files are distributed across multiple distinct subfolders (e.g. 1/, 2/, 3/ or nested)
+        if len(folder_files) > 1:
+            for folder, flist in folder_files.items():
+                sname = os.path.basename(folder)
+                series_map[sname] = sorted(flist, key=MriSeriesLoader._sort_key)
+            return series_map
 
+        # If all files are in a single folder, try grouping by DICOM SeriesNumber
+        only_folder = list(folder_files.keys())[0]
+        flist = folder_files[only_folder]
+
+        grouped = False
+        if pydicom:
+            dcm_series = {}
+            for fp in flist:
+                try:
+                    ds = pydicom.dcmread(fp, stop_before_pixels=True, force=True)
+                    s_num = str(getattr(ds, "SeriesNumber", "1"))
+                    s_desc = getattr(ds, "SeriesDescription", "")
+                    label = f"{s_num}_{s_desc}" if s_desc else s_num
+                    dcm_series.setdefault(label, []).append(fp)
+                    grouped = True
+                except Exception:
+                    dcm_series.setdefault("1", []).append(fp)
+            if grouped and len(dcm_series) > 1:
+                for sk, s_files in dcm_series.items():
+                    series_map[sk] = sorted(s_files, key=MriSeriesLoader._sort_key)
+                return series_map
+
+        sname = os.path.basename(only_folder)
+        if sname == os.path.basename(root_dir):
+            sname = "Series 1"
+        series_map[sname] = sorted(flist, key=MriSeriesLoader._sort_key)
         return series_map
 
     @staticmethod
@@ -103,34 +133,36 @@ class MriSeriesLoader:
     @staticmethod
     def read_image_as_numpy(path):
         """Reads a DICOM or standard image into a normalized 2D numpy array (0-255)."""
-        ext = os.path.splitext(path)[1].lower()
-        if ext in [".dcm", ".ima"] and pydicom:
+        if not path or not os.path.exists(path):
+            return np.zeros((256, 256), dtype=np.uint8)
+
+        # 1. Try PyDICOM first (regardless of extension)
+        if pydicom:
             try:
-                ds = pydicom.dcmread(path)
-                arr = ds.pixel_array.astype(np.float32)
-                # Rescale slope and intercept if present
-                slope = getattr(ds, "RescaleSlope", 1.0)
-                intercept = getattr(ds, "RescaleIntercept", 0.0)
-                arr = arr * slope + intercept
-                # Windowing if present
-                wc = getattr(ds, "WindowCenter", None)
-                ww = getattr(ds, "WindowWidth", None)
-                if wc is not None and ww is not None:
-                    if isinstance(wc, (list, pydicom.multival.MultiValue)):
-                        wc = wc[0]
-                    if isinstance(ww, (list, pydicom.multival.MultiValue)):
-                        ww = ww[0]
-                    low = wc - ww / 2.0
-                    high = wc + ww / 2.0
-                    arr = np.clip(arr, low, high)
-                mi, ma = np.min(arr), np.max(arr)
-                if ma > mi:
-                    arr = (arr - mi) / (ma - mi) * 255.0
-                return arr.astype(np.uint8)
+                ds = pydicom.dcmread(path, force=True)
+                if hasattr(ds, "pixel_array"):
+                    arr = ds.pixel_array.astype(np.float32)
+                    slope = float(getattr(ds, "RescaleSlope", 1.0))
+                    intercept = float(getattr(ds, "RescaleIntercept", 0.0))
+                    arr = arr * slope + intercept
+                    wc = getattr(ds, "WindowCenter", None)
+                    ww = getattr(ds, "WindowWidth", None)
+                    if wc is not None and ww is not None:
+                        if isinstance(wc, (list, pydicom.multival.MultiValue)):
+                            wc = wc[0]
+                        if isinstance(ww, (list, pydicom.multival.MultiValue)):
+                            ww = ww[0]
+                        low = float(wc) - float(ww) / 2.0
+                        high = float(wc) + float(ww) / 2.0
+                        arr = np.clip(arr, low, high)
+                    mi, ma = np.min(arr), np.max(arr)
+                    if ma > mi:
+                        arr = (arr - mi) / (ma - mi) * 255.0
+                    return arr.astype(np.uint8)
             except Exception:
                 pass
 
-        # Standard image loader
+        # 2. Standard image loader (JPEG, PNG, BMP)
         try:
             im = Image.open(path).convert("L")
             return np.array(im, dtype=np.uint8)
@@ -139,6 +171,7 @@ class MriSeriesLoader:
                 im = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
                 if im is not None:
                     return im
+
         return np.zeros((256, 256), dtype=np.uint8)
 
 
