@@ -965,7 +965,7 @@ class MedalPacsClient:
     # -------------------------------------------------------------------------
     # Core Study Download Engine (Ultra-Fast Parallel Concurrent Architecture)
     # -------------------------------------------------------------------------
-    def download_study(self, user_input, chosen_base_url=None, mode=0, progress_callback=None):
+    def download_study(self, user_input, chosen_base_url=None, base_server=None, mode=0, progress_callback=None):
         """
         Complete High-Speed Parallel Downloader:
         1. Works on both Internal LAN (192.168.11.201) and Outside Web (marivan-pacs-boali.muk.ac.ir).
@@ -976,6 +976,8 @@ class MedalPacsClient:
            reducing transfer times from 5-7 minutes down to ~10-15 seconds.
         6. Falls back to Download.aspx (ZIP) if direct streaming is disabled.
         """
+        if chosen_base_url is None and base_server is not None:
+            chosen_base_url = base_server
         # Ensure session is active from disk if within 12 hours
         if not self.is_authenticated():
             self.load_saved_session()

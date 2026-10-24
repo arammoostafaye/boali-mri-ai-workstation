@@ -55,19 +55,40 @@ class MriSeriesLoader:
                 files = []
                 for fname in sorted(os.listdir(sdir)):
                     ext = os.path.splitext(fname)[1].lower()
-                    if ext in [".jpg", ".jpeg", ".png", ".dcm", ".ima", ".bmp", ".tif", ".tiff"]:
+                    if ext in [".jpg", ".jpeg", ".png", ".dcm", ".dicom", ".ima", ".bmp", ".tif", ".tiff"] or (len(fname) <= 12 and "." not in fname):
                         files.append(os.path.join(sdir, fname))
                 if files:
                     series_map[sname] = sorted(files, key=MriSeriesLoader._sort_key)
         else:
-            # Flat directory with images
-            files = []
+            # Flat directory
+            all_files = []
             for fname in sorted(os.listdir(root_dir)):
-                ext = os.path.splitext(fname)[1].lower()
-                if ext in [".jpg", ".jpeg", ".png", ".dcm", ".ima", ".bmp"]:
-                    files.append(os.path.join(root_dir, fname))
-            if files:
-                series_map["1"] = sorted(files, key=MriSeriesLoader._sort_key)
+                fpath = os.path.join(root_dir, fname)
+                if os.path.isfile(fpath):
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in [".jpg", ".jpeg", ".png", ".dcm", ".dicom", ".ima", ".bmp"] or (len(fname) <= 12 and "." not in fname):
+                        all_files.append(fpath)
+
+            # Try grouping by DICOM SeriesNumber if pydicom available
+            grouped = False
+            if pydicom and all_files:
+                dcm_series = {}
+                for fp in all_files:
+                    try:
+                        ds = pydicom.dcmread(fp, stop_before_pixels=True)
+                        s_num = str(getattr(ds, "SeriesNumber", "1"))
+                        s_desc = getattr(ds, "SeriesDescription", "")
+                        label = f"{s_num}_{s_desc}" if s_desc else s_num
+                        dcm_series.setdefault(label, []).append(fp)
+                        grouped = True
+                    except Exception:
+                        dcm_series.setdefault("1", []).append(fp)
+                if grouped and len(dcm_series) > 1:
+                    for sk, fl in dcm_series.items():
+                        series_map[sk] = sorted(fl, key=MriSeriesLoader._sort_key)
+
+            if not series_map and all_files:
+                series_map["1"] = sorted(all_files, key=MriSeriesLoader._sort_key)
 
         return series_map
 

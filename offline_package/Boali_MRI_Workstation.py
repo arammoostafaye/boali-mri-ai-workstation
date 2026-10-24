@@ -40,7 +40,7 @@ from pacs_downloader import MedalPacsClient, PacsCacheManager, encrypt_aes_128_c
 # Base paths
 EXE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(EXE_DIR, "config.json")
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 HOSPITAL_TITLE = "بیمارستان بوعلی مریوان"
 DEVELOPER_NAME = "آرام مصطفائی"
 
@@ -538,27 +538,41 @@ class MedalPacsModal(tk.Toplevel):
         self.lbl_status.config(text="در حال دریافت پرونده از پکس مدال...")
         self.log(f"شروع استعلام پرونده: {url}")
 
-        t = threading.Thread(target=self._download_worker, args=(url,))
+        t = threading.Thread(target=self._download_worker, args=(url, self.server_choice.get()))
         t.daemon = True
         t.start()
 
-    def _download_worker(self, url):
+    def _update_progress(self, current, text=""):
+        msg = f"دریافت پکس: {current}% {text}"
+        self.lbl_status.config(text=msg)
+        self.log(msg)
+
+    def _download_worker(self, url, chosen_server):
         try:
-            files, pid, pname = self.pacs_client.download_study(url, base_server=self.server_choice.get())
-            self.after(0, self._on_download_success, files, pid, pname)
+            res = self.pacs_client.download_study(url, chosen_base_url=chosen_server, mode=0, progress_callback=self._update_progress)
+            self.after(0, self._on_download_success, res)
         except Exception as e:
             self.after(0, self._on_download_error, str(e))
 
-    def _on_download_success(self, files, pid, pname):
+    def _on_download_success(self, res):
         self.btn_download.config(state=tk.NORMAL, bg=C_GREEN)
         self.lbl_status.config(text="دریافت با موفقیت پایان یافت.")
-        self.log(f"دریافت {len(files)} فایل با موفقیت انجام شد ({pname}).")
+        
+        pname = res.get("pname", "")
+        pid = res.get("pid", "")
+        dicom_files = res.get("dicom_files", [])
+        connected_base = res.get("connected_base", "")
+        extract_folder = res.get("extract_folder", "")
 
-        if files:
-            # Load into main workstation
-            study_dir = os.path.dirname(files[0])
-            self.app.load_study_from_directory(study_dir, pname=pname, pid=pid)
-            messagebox.showinfo("اتمام دریافت", f"پرونده ام‌آر‌آی با موفقیت بارگذاری شد:\nبیمار: {pname}\nشناسه: {pid}", parent=self)
+        self.log(f"✓ دریافت موفقیت‌آمیز {len(dicom_files)} فایل دایکام از {connected_base} برای {pname} (شناسه: {pid})")
+
+        if dicom_files:
+            target_dir = extract_folder if (extract_folder and os.path.exists(extract_folder)) else os.path.dirname(dicom_files[0])
+            self.app.load_study_from_directory(target_dir, pname=pname, pid=pid)
+            messagebox.showinfo("اتمام دریافت پکس",
+                                f"پرونده ام‌آر‌آی با موفقیت از پکس مدال ({connected_base}) دریافت و بارگذاری شد:\n\n"
+                                f"نام بیمار: {pname}\nشناسه: {pid}\nتعداد کلیشه‌ها: {len(dicom_files)}",
+                                parent=self)
             self.destroy()
 
     def _on_download_error(self, err):
