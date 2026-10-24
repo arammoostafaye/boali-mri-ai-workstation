@@ -40,7 +40,7 @@ from pacs_downloader import MedalPacsClient, PacsCacheManager, encrypt_aes_128_c
 # Base paths
 EXE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(EXE_DIR, "config.json")
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 HOSPITAL_TITLE = "بیمارستان بوعلی مریوان"
 DEVELOPER_NAME = "آرام مصطفائی"
 
@@ -1027,13 +1027,21 @@ class BoaliMriWorkstation(tk.Tk):
 
             # Display findings summary
             baker = res.get("bakers_cyst", {})
-            f_text = f"• جهت اندام: زانوی {lat} (اطمینان: {res.get('laterality_confidence', 0.95)*100:.0f}%)\n"
+            lat_fa_str = "چپ" if lat == "Left" else "راست"
+            f_text = f"• جهت اندام: زانوی {lat_fa_str} (اطمینان: {res.get('laterality_confidence', 0.95)*100:.0f}%)\n"
             if baker.get("present"):
                 f_text += f"• کیست بیکر: مثبت ({baker.get('width_mm')} × {baker.get('depth_mm')} × {baker.get('length_mm')} میلی‌متر)\n"
                 f_text += f"• وضعیت کیست: {baker.get('loculation')} | حجم: {baker.get('volume_cm3')} cm3\n"
-            f_text += f"• منیسک داخلی: {res.get('findings', {}).get('medial_meniscus', {}).get('status', 'Intact')}\n"
+            else:
+                f_text += "• کیست بیکر: منفی (فاقد هرگونه کیست یا تجمع مایع غیرطبیعی)\n"
+            
+            med_stat = res.get('findings', {}).get('medial_meniscus', {}).get('status', 'سالم')
+            lat_stat = res.get('findings', {}).get('lateral_meniscus', {}).get('status', 'سالم')
+            f_text += f"• منیسک داخلی: {med_stat}\n"
+            f_text += f"• منیسک خارجی: {lat_stat}\n"
             f_text += f"• رباط‌های صلیبی: ACL و PCL کاملاً سالم و پیوسته\n"
-            f_text += f"• افیوژن مفصلی: خفیف در بورس سوپراپاتلار"
+            eff_stat = res.get('findings', {}).get('patellofemoral', {}).get('effusion', 'فاقد افیوژن بارز')
+            f_text += f"• افیوژن مفصلی: {eff_stat}"
 
             self.txt_findings.delete("1.0", tk.END)
             self.txt_findings.insert(tk.END, f_text)

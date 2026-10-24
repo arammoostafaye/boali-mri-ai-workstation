@@ -36,6 +36,33 @@ class MriReportGenerator:
         baker = analysis.get("bakers_cyst", {})
         findings = analysis.get("findings", {})
 
+        # 1. Menisci Evaluation
+        med_m = findings.get("medial_meniscus", {})
+        lat_m = findings.get("lateral_meniscus", {})
+        med_grade = med_m.get("grade", 0)
+        lat_grade = lat_m.get("grade", 0)
+
+        if med_grade >= 2:
+            med_en = f"{med_m.get('status', 'Tear / signal alteration')} ({med_m.get('location', 'Posterior horn')})."
+            med_fa = f"افزایش سیگنال داخل‌بافتی در {med_m.get('location', 'شاخ خلفی')} با گسترش به لبه مفصلی، مطرح‌کننده پارگی ({med_m.get('status', '')})."
+        elif med_grade == 1:
+            med_en = "Mild intrasubstance myxoid signal alteration (Grade I) without tear. Articular surfaces are intact."
+            med_fa = "تغییرات سیگنال خفیف گرید ۱ داخل‌بافتی (دژنراسیون میکسوئید) بدون گسترش به سطوح مفصلی؛ فاقد پارگی."
+        else:
+            med_en = "Intact with normal low signal intensity and sharp triangular morphology. No tear or degenerative change."
+            med_fa = "شکل مثلثی با حاشیه‌های تیز و سیگنال کم‌شدت طبیعی حفظ شده است. شواهدی از پارگی یا تغییرات دژنراتیو دیده نمی‌شود."
+
+        if lat_grade >= 2:
+            lat_en = f"{lat_m.get('status', 'Tear / signal alteration')} ({lat_m.get('location', 'Posterior horn')})."
+            lat_men_fa = f"افزایش سیگنال غیرطبیعی و پارگی در {lat_m.get('location', 'منیسک خارجی')}."
+        else:
+            lat_en = "Intact with normal low signal intensity and sharp triangular morphology. No tear or parameniscal cyst."
+            lat_men_fa = "دارای مورفولوژی طبیعی، کناره‌های مثلثی تیز و سیگنال کم‌شدت یکنواخت؛ فاقد پارگی یا کیست پارامنیسکال."
+
+        # 2. Joint Effusion
+        effusion_str = findings.get('patellofemoral', {}).get('effusion', 'No significant joint effusion.')
+        has_effusion = "mild" in effusion_str.lower() or "moderate" in effusion_str.lower() or "marked" in effusion_str.lower()
+
         en_report = f"""MAGNETIC RESONANCE IMAGING (MRI) OF THE {laterality.upper()} KNEE
 KURDISTAN UNIVERSITY OF MEDICAL SCIENCES
 MARIVAN HEALTHCARE NETWORK - BOALI HOSPITAL
@@ -54,8 +81,8 @@ Coronal PD Fat-Suppressed, and Axial PD Fat-Suppressed sequences on a high-field
 FINDINGS:
 
 1. MENISCI:
-- Medial Meniscus: {findings.get('medial_meniscus', {}).get('status', 'Intact')} ({findings.get('medial_meniscus', {}).get('location', '')}).
-- Lateral Meniscus: {findings.get('lateral_meniscus', {}).get('status', 'Intact')}.
+- Medial Meniscus: {med_en}
+- Lateral Meniscus: {lat_en}
 
 2. CRUCIATE LIGAMENTS:
 - Anterior Cruciate Ligament (ACL): {findings.get('acl', {}).get('status', 'Intact')} - {findings.get('acl', {}).get('details', '')}
@@ -67,7 +94,7 @@ FINDINGS:
 
 4. EXTENSOR MECHANISM & PATELLOFEMORAL COMPARTMENT:
 - Retropatellar & Trochlear Cartilage: {findings.get('patellofemoral', {}).get('cartilage', 'Preserved')}
-- Joint Effusion: {findings.get('patellofemoral', {}).get('effusion', 'None')}
+- Joint Effusion: {effusion_str}
 - Infrapatellar Fat Pad: {findings.get('patellofemoral', {}).get('hoffa', 'Normal')}
 
 5. OSSEOUS STRUCTURES & BONE MARROW:
@@ -76,43 +103,80 @@ FINDINGS:
 6. POPLITEAL FOSSA & SOFT TISSUES:"""
 
         if baker.get("present"):
-            w = baker.get("width_mm", 22.0)
-            d = baker.get("depth_mm", 15.0)
-            l = baker.get("length_mm", 35.0)
-            v = baker.get("volume_cm3", 6.0)
-            loc = baker.get("loculation", "Multiloculated")
+            w = baker.get("width_mm", 12.0)
+            d = baker.get("depth_mm", 14.0)
+            l = baker.get("length_mm", 25.0)
+            v = baker.get("volume_cm3", 2.2)
+            loc = baker.get("loculation", "Unilocular")
             en_report += f"""
-- A prominent {loc.lower()} fluid collection (Popliteal / Baker's Cyst) is demonstrated in the 
+- A well-defined {loc.lower()} fluid collection (Popliteal / Baker's Cyst) is demonstrated in the 
   posteromedial popliteal fossa, tracking characteristically between the medial head of the 
   gastrocnemius muscle and the semimembranosus tendon.
 - Approximate Dimensions: {w} mm (transverse) x {d} mm (AP) x {l} mm (craniocaudal length).
   Calculated Volume: ~{v} cm3.
-- The cyst exhibits high T2/PD-FS fluid signal with thin internal septations and an intact communicating neck.
 - Adjacent popliteal neurovascular vessels are patent without compression or thrombosis."""
         else:
             en_report += """
-- No popliteal cyst (Baker's cyst) or soft tissue mass lesion identified in the popliteal fossa."""
+- Normal popliteal fossa without evidence of Baker's cyst or abnormal fluid collection. Neurovascular bundle is intact."""
+
+        # English Impression
+        is_completely_normal = (med_grade == 0 and lat_grade == 0 and not baker.get("present") and not has_effusion)
 
         en_report += f"""
 
 ======================================================================
 IMPRESSION:
-1. Multiplanar MRI of the {laterality} knee demonstrating:"""
-        if baker.get("present"):
+Multiplanar MRI of the {laterality} knee demonstrating:"""
+
+        if is_completely_normal:
             en_report += f"""
-   * Prominent Popliteal Cyst (Baker's cyst) measuring {baker.get('width_mm')} x {baker.get('depth_mm')} x {baker.get('length_mm')} mm in the posteromedial compartment.
-   * Degenerative signal alteration / tear involving the posterior horn of the medial meniscus (likely underlying source of joint fluid decompression)."""
+1. Normal MRI examination of the {laterality} knee without internal derangement.
+2. Intact medial and lateral menisci without tear.
+3. Intact anterior and posterior cruciate ligaments (ACL & PCL).
+4. Intact medial and lateral collateral ligament complexes (MCL & LCL).
+5. No joint effusion or popliteal (Baker's) cyst."""
         else:
+            imp_idx = 1
+            if med_grade >= 2:
+                en_report += f"\n{imp_idx}. Degenerative signal alteration / tear involving the posterior horn of the medial meniscus."
+                imp_idx += 1
+            elif med_grade == 1:
+                en_report += f"\n{imp_idx}. Mild intrameniscal degenerative signal (Grade I) in medial meniscus without tear."
+                imp_idx += 1
+
+            if lat_grade >= 2:
+                en_report += f"\n{imp_idx}. Degenerative tear / signal alteration involving the lateral meniscus."
+                imp_idx += 1
+
+            if baker.get("present"):
+                en_report += f"\n{imp_idx}. Popliteal cyst (Baker's cyst) measuring {baker.get('width_mm')} x {baker.get('depth_mm')} x {baker.get('length_mm')} mm in the posteromedial compartment."
+                imp_idx += 1
+
+            if has_effusion:
+                en_report += f"\n{imp_idx}. {effusion_str}"
+                imp_idx += 1
+
+            en_report += f"""
+{imp_idx}. Intact cruciate (ACL & PCL) and collateral (MCL & LCL) ligaments."""
+
+        if is_completely_normal:
             en_report += """
-   * No dominant meniscal tear or popliteal cyst."""
-        en_report += f"""
-2. Intact anterior and posterior cruciate ligaments (ACL & PCL).
-3. Intact medial and lateral collateral ligament complexes (MCL & LCL).
-4. Mild joint effusion.
 
 RECOMMENDATIONS:
-- Orthopedic clinical correlation is advised. Conservative therapy with quadriceps strengthening is recommended. 
-- In case of posterior popliteal tightness or neurovascular discomfort, ultrasound-guided aspiration or arthroscopic evaluation can be considered.
+- Clinical correlation with physical symptoms. Routine conservative care; no operative intervention indicated."""
+        elif baker.get("present") or med_grade >= 2:
+            en_report += """
+
+RECOMMENDATIONS:
+- Orthopedic clinical correlation is advised. Conservative therapy with quadriceps strengthening is recommended.
+- Follow-up evaluation if symptoms persist."""
+        else:
+            en_report += """
+
+RECOMMENDATIONS:
+- Clinical correlation is recommended."""
+
+        en_report += """
 
 Sincerely Yours,
 Department of Medical Imaging & Radiology
@@ -132,8 +196,8 @@ Boali Hospital, Marivan"""
 شرح یافته‌های بالینی:
 
 ۱. وضعیت منیسک‌ها (Menisci):
-• منیسک داخلی (Medial Meniscus): افزایش سیگنال داخل‌بافتی خطی در شاخ خلفی منیسک با تماس با لبه مفصلی تحتانی، مطرح‌کننده پارگی دژنراتیو (تغییرات گرید II الی III) مشاهده می‌شود. شاخ قدامی و تنه منیسک وضعیت طبیعی دارند.
-• منیسک خارجی (Lateral Meniscus): دارای مورفولوژی طبیعی، کناره‌های مثلثی تیز و سیگنال کم‌شدت یکنواخت بدون شواهدی از پارگی یا کیست پارامنیسکال است.
+• منیسک داخلی (Medial Meniscus): {med_fa}
+• منیسک خارجی (Lateral Meniscus): {lat_men_fa}
 
 ۲. رباط‌های متقاطع (Cruciate Ligaments):
 • رباط صلیبی قدامی (ACL): پیوستگی فیبرها، زاویه آناتومیک و کشش طبیعی حفظ شده است. شواهدی از پارگی یا کشیدگی دیده نمی‌شود.
@@ -145,7 +209,7 @@ Boali Hospital, Marivan"""
 
 ۴. ساختار اکستنسور و فضای پاتلوفمورال:
 • غضروف‌های مفصلی پشت کشکک و تروکلئا ضخامت خود را حفظ کرده‌اند و فاقد نقص کانونی هستند.
-• افیوژن خفیف مفصلی در بورس سوپراپاتلار و ناودان‌های جانبی مشاهده می‌شود.
+• افیوژن مفصلی: {"افیوژن خفیف در بورس سوپراپاتلار دیده می‌شود." if has_effusion else "افیوژن قابل توجهی در فضای مفصلی رویت نشد."}
 • پد چربی هوفا (Hoffa's Fat Pad) سیگنال نرمال دارد.
 
 ۵. استخوان‌ها و مغز استخوان:
@@ -154,40 +218,71 @@ Boali Hospital, Marivan"""
 ۶. حفره پوپلیتئال (پشت زانو) و بافت‌های نرم:"""
 
         if baker.get("present"):
-            w = baker.get("width_mm", 22.0)
-            d = baker.get("depth_mm", 15.0)
-            l = baker.get("length_mm", 35.0)
-            v = baker.get("volume_cm3", 6.0)
+            w = baker.get("width_mm", 12.0)
+            d = baker.get("depth_mm", 14.0)
+            l = baker.get("length_mm", 25.0)
+            v = baker.get("volume_cm3", 2.2)
             loc_fa = "چندحفره‌ای (مولتی‌لوکولار) با تیغه‌های نازک داخلی" if "Multi" in baker.get("loculation", "") else "تک‌حفره‌ای"
             fa_report += f"""
-• تجمع مایع با سیگنال بالا در سکانس‌های با حذف چربی و T2 به صورت یک «کیست بیکر / کیست پوپلیتئال» با نمای {loc_fa} در مجاورت فضای بین تاندون سمی‌ممبرانوسوس و سر داخلی عضله گاستروکنمیوس مشاهده شد.
-• ابعاد تقریبی: {w} میلی‌متر (عرض) × {d} میلی‌متر (عمق) × {l} میلی‌متر (گسترش طولی) با حجم تقریبی حدود {v} سانتی‌متر مکعب.
-• گردن اتصالی کیست به فضای مفصلی باز است.
-• دسته‌جات عروقی-عصبی پوپلیتئال مجاور دارای جریان خون طبیعی بوده و فاقد ترومبوز یا تهاجم می‌باشند."""
+• تجمع مایع کپسوله‌شده در فضای خلفی-داخلی زانو بین تاندون سمی‌ممبرانوسوس و سر داخلی عضله گاستروکنمیوس منطبق بر «کیست بیکر / کیست پوپلیتئال» با نمای {loc_fa} رویت شد.
+• ابعاد اندازه‌گیری‌شده: {w} میلی‌متر (عرض) × {d} میلی‌متر (عمق) × {l} میلی‌متر (طول) با حجم تقریبی حدود {v} سانتی‌متر مکعب.
+• دسته‌جات عروقی-عصبی پوپلیتئال مجاور دارای مسیر و جریان طبیعی بوده و فاقد ترومبوز یا تهاجم می‌باشند."""
         else:
             fa_report += """
-• هیچ‌گونه کیست پوپلیتئال (کیست بیکر) یا توده بافت نرم در خلف زانو رویت نشد."""
+• حفره پوپلیتئال طبیعی است. هیچ‌گونه کیست پوپلیتئال (کیست بیکر) یا تجمع مایع غیرطبیعی رویت نشد. دسته‌جات عروقی-عصبی سالم می‌باشند."""
 
         fa_report += f"""
 
 ======================================================================
 خلاصه و نتیجه‌گیری نهایی (Impression):
-۱. ام‌آر‌آی زانوی {lat_fa}:"""
-        if baker.get("present"):
+ام‌آر‌آی زانوی {lat_fa}:"""
+
+        if is_completely_normal:
             fa_report += f"""
-   * کیست پوپلیتئال مشخص (کیست بیکر) به ابعاد {baker.get('width_mm')} × {baker.get('depth_mm')} × {baker.get('length_mm')} میلی‌متر در فضای خلفی-داخلی زانو.
-   * پارگی دژنراتیو / تغییرات سیگنال در شاخ خلفی منیسک داخلی (علت زمینه‌ای خروج مایع سینوویال به درون بورس)."""
+۱. ام‌آر‌آی زانوی {lat_fa} در محدوده طبیعی (Normal Study) فاقد آسیب حاد داخلی.
+۲. منیسک‌های داخلی و خارجی کاملاً سالم و فاقد پارگی هستند.
+۳. رباط‌های صلیبی (ACL و PCL) و رباط‌های جانبی (MCL و LCL) سالم و پیوسته می‌باشند.
+۴. فاقد افیوژن مفصلی یا کیست پوپلیتئال (کیست بیکر)."""
         else:
+            fa_idx = 1
+            if med_grade >= 2:
+                fa_report += f"\n{fa_idx}. پارگی / تغییرات سیگنال دژنراتیو در شاخ خلفی منیسک داخلی."
+                fa_idx += 1
+            elif med_grade == 1:
+                fa_report += f"\n{fa_idx}. تغییرات سیگنال دژنراتیو خفیف (گرید ۱) در منیسک داخلی بدون پارگی."
+                fa_idx += 1
+
+            if lat_grade >= 2:
+                fa_report += f"\n{fa_idx}. پارگی / تغییرات سیگنال در منیسک خارجی."
+                fa_idx += 1
+
+            if baker.get("present"):
+                fa_report += f"\n{fa_idx}. کیست پوپلیتئال (کیست بیکر) به ابعاد {baker.get('width_mm')} × {baker.get('depth_mm')} × {baker.get('length_mm')} میلی‌متر در فضای خلفی-داخلی."
+                fa_idx += 1
+
+            if has_effusion:
+                fa_report += f"\n{fa_idx}. افیوژن مفصلی در بورس سوپراپاتلار."
+                fa_idx += 1
+
+            fa_report += f"\n{fa_idx}. سلامت کامل رباط‌های متقاطع (ACL و PCL) و رباط‌های جانبی (MCL و LCL)."
+
+        if is_completely_normal:
             fa_report += """
-   * عدم وجود پارگی بارز در منیسک‌ها یا کیست پوپلیتئال."""
-        fa_report += f"""
-۲. سلامت کامل رباط‌های صلیبی قدامی و خلفی (ACL و PCL).
-۳. سلامت رباط‌های جانبی داخلی و خارجی (MCL و LCL).
-۴. افیوژن خفیف مفصلی.
 
 توصیه‌ها و پیگیری بالینی:
-• تطابق با معاینات بالینی جراح محترم ارتوپدی پیشنهاد می‌گردد. مدیریت اولیه غیرجراحی (فیزیوتراپی و تقویت عضلات چهارسر ران) توصیه می‌شود.
-• در صورت بروز احساس فشار در پشت زانو یا محدودیت حرکتی، تخلیه کیست تحت هدایت سونوگرافی یا ارزیابی آرتروسکوپی مدنظر قرار گیرد.
+• تطابق با معاینات و علائم بالینی بیمار. نیاز به اقدام مداخله‌ای خاصی وجود ندارد."""
+        elif baker.get("present") or med_grade >= 2:
+            fa_report += """
+
+توصیه‌ها و پیگیری بالینی:
+• تطابق با معاینات بالینی جراح محترم ارتوپدی و اقدامات حمایتی/فیزیوتراپی در صورت لزوم بالینی."""
+        else:
+            fa_report += """
+
+توصیه‌ها و پیگیری بالینی:
+• تطابق بالینی توصیه می‌گردد."""
+
+        fa_report += """
 
 با احترام،
 بخش تصویربرداری پزشکی و ام‌آر‌آی
