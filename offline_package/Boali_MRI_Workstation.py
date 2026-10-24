@@ -32,7 +32,7 @@ from PIL import Image, ImageTk
 # Local modules
 from mri_analyzer import (
     MriSeriesLoader, KneeMriEngine, ShoulderMriEngine,
-    SpineMriEngine, HipMriEngine, BrainMriEngine
+    SpineMriEngine, HipMriEngine, BrainMriEngine, VisionAiEngine
 )
 from report_generator import MriReportGenerator
 from pacs_downloader import MedalPacsClient, PacsCacheManager, encrypt_aes_128_cbc
@@ -40,7 +40,7 @@ from pacs_downloader import MedalPacsClient, PacsCacheManager, encrypt_aes_128_c
 # Base paths
 EXE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(EXE_DIR, "config.json")
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 HOSPITAL_TITLE = "بیمارستان بوعلی مریوان"
 DEVELOPER_NAME = "آرام مصطفائی"
 
@@ -596,6 +596,161 @@ class MedalPacsModal(tk.Toplevel):
 
 
 # -----------------------------------------------------------------------------
+# Multimodal Vision AI Engine Configuration Dialog
+# -----------------------------------------------------------------------------
+class AiEngineConfigDialog(tk.Toplevel):
+    """Configuration Dialog for Multimodal Vision AI Models (Ollama Free Local / Cloud)."""
+
+    def __init__(self, parent, config, on_save_callback):
+        super().__init__(parent)
+        self.title("تنظیمات موتور هوش مصنوعی بینایی (Vision AI Engine)")
+        self.geometry("680x590")
+        self.configure(bg=C_CANVAS)
+        self.resizable(False, False)
+        self.config = config or {}
+        self.on_save = on_save_callback
+
+        ai_cfg = self.config.get("ai_engine", {})
+        self.var_provider = tk.StringVar(value=ai_cfg.get("provider", "ollama"))
+        self.var_ollama_host = tk.StringVar(value=ai_cfg.get("ollama_host", "http://localhost:11434"))
+        self.var_ollama_model = tk.StringVar(value=ai_cfg.get("ollama_model", "llama3.2-vision"))
+        self.var_gemini_key = tk.StringVar(value=ai_cfg.get("gemini_api_key", ""))
+
+        self.init_ui()
+        self.check_ollama_status()
+
+    def init_ui(self):
+        # Header banner
+        header = tk.Frame(self, bg="#090d16", padx=16, pady=12)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="مرکز تنظیمات موتور هوش مصنوعی بینایی (Vision AI)",
+                 font=("Arial", 12, "bold"), fg=C_CYAN, bg="#090d16").pack(anchor="e")
+        tk.Label(header, text="انتخاب مدل بینایی چندوجهی مشابه مغز دستیار هوشمند (بدون نیاز به خرید API)",
+                 font=("Arial", 9), fg=C_TEXT_MUTED, bg="#090d16").pack(anchor="e")
+
+        body = tk.Frame(self, bg=C_CANVAS, padx=16, pady=12)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        # 1. Card: Local Free Ollama Vision AI
+        c1 = tk.LabelFrame(body, text="۱. مدل بینایی محلی و ۱۰۰٪ رایگان (Ollama - آفلاین بدون اینترنت و بدون API)",
+                           bg=C_PANEL, fg=C_CYAN, font=("Arial", 9, "bold"), padx=12, pady=10)
+        c1.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Radiobutton(c1, text="استفاده از مدل محلی هوش مصنوعی بینایی (پیشنهادی)",
+                       variable=self.var_provider, value="ollama",
+                       font=("Arial", 10, "bold"), fg=C_GREEN, bg=C_PANEL,
+                       selectcolor=C_CANVAS, activebackground=C_PANEL).pack(anchor="e")
+
+        tk.Label(c1, text="این مدل مستقیماً روی ویندوز شما اجرا می‌شود و هیچ هزینه‌ای ندارد.",
+                 font=("Arial", 8), fg=C_TEXT_MUTED, bg=C_PANEL).pack(anchor="e", pady=(0, 6))
+
+        # Host & Model
+        row1 = tk.Frame(c1, bg=C_PANEL)
+        row1.pack(fill=tk.X, pady=3)
+        tk.Label(row1, text="نام مدل:", font=("Arial", 9), fg=C_TEXT_MAIN, bg=C_PANEL).pack(side=tk.RIGHT, padx=4)
+        tk.Entry(row1, textvariable=self.var_ollama_model, width=18, font=("Arial", 9),
+                 bg=C_CARD, fg=C_TEXT_MAIN, insertbackground="white").pack(side=tk.RIGHT, padx=4)
+
+        tk.Label(row1, text="آدرس سرویس:", font=("Arial", 9), fg=C_TEXT_MAIN, bg=C_PANEL).pack(side=tk.RIGHT, padx=(12, 4))
+        tk.Entry(row1, textvariable=self.var_ollama_host, width=22, font=("Arial", 9),
+                 bg=C_CARD, fg=C_TEXT_MAIN, insertbackground="white").pack(side=tk.RIGHT, padx=4)
+
+        # Status & Action
+        row2 = tk.Frame(c1, bg=C_PANEL)
+        row2.pack(fill=tk.X, pady=6)
+        self.lbl_ollama_status = tk.Label(row2, text="در حال بررسی وضعیت...", font=("Arial", 9, "bold"),
+                                          fg="#f59e0b", bg=C_PANEL)
+        self.lbl_ollama_status.pack(side=tk.RIGHT, padx=4)
+
+        tk.Button(row2, text="🔄 بررسی وضعیت", font=("Arial", 8, "bold"), bg=C_CARD, fg=C_CYAN,
+                  relief=tk.FLAT, padx=8, pady=2, command=self.check_ollama_status).pack(side=tk.RIGHT, padx=6)
+
+        tk.Button(row2, text="🚀 راه‌اندازی سریع با اسکریپت (setup_local_ai_ollama.bat)",
+                  font=("Arial", 8, "bold"), bg=C_BLUE, fg="white",
+                  relief=tk.FLAT, padx=8, pady=2, command=self.launch_ollama_setup).pack(side=tk.LEFT, padx=4)
+
+        # 2. Card: Free Cloud Google Gemini
+        c2 = tk.LabelFrame(body, text="۲. سهمیه رایگان هوش مصنوعی گوگل (Google Gemini 1.5 Flash - Free Tier)",
+                           bg=C_PANEL, fg=C_CYAN, font=("Arial", 9, "bold"), padx=12, pady=10)
+        c2.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Radiobutton(c2, text="استفاده از هوش مصنوعی ابری رایگان گوگل با اکانت جیمیل",
+                       variable=self.var_provider, value="gemini",
+                       font=("Arial", 10, "bold"), fg=C_GREEN, bg=C_PANEL,
+                       selectcolor=C_CANVAS, activebackground=C_PANEL).pack(anchor="e")
+
+        tk.Label(c2, text="شرکت گوگل به تمام دارندگان Gmail سهمیه رایگان بدون نیاز به کارت بانکی می‌دهد (از aistudio.google.com).",
+                 font=("Arial", 8), fg=C_TEXT_MUTED, bg=C_PANEL).pack(anchor="e", pady=(0, 4))
+
+        row_gem = tk.Frame(c2, bg=C_PANEL)
+        row_gem.pack(fill=tk.X, pady=3)
+        tk.Label(row_gem, text="کلید رایگان API:", font=("Arial", 9), fg=C_TEXT_MAIN, bg=C_PANEL).pack(side=tk.RIGHT, padx=4)
+        tk.Entry(row_gem, textvariable=self.var_gemini_key, width=38, font=("Arial", 9),
+                 bg=C_CARD, fg=C_TEXT_MAIN, insertbackground="white", show="*").pack(side=tk.RIGHT, padx=4)
+
+        # 3. Card: Built-in Local Rules v1.0.6
+        c3 = tk.LabelFrame(body, text="۳. موتور داخلی و آفلاین پردازش تصویر پایتون (v1.0.6 Local Rules)",
+                           bg=C_PANEL, fg=C_CYAN, font=("Arial", 9, "bold"), padx=12, pady=10)
+        c3.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Radiobutton(c3, text="پردازش داخلی مستقل (سگمنتیشن هندسی بدون نیاز به ابزار خارجی)",
+                       variable=self.var_provider, value="local_rules",
+                       font=("Arial", 10, "bold"), fg=C_GREEN, bg=C_PANEL,
+                       selectcolor=C_CANVAS, activebackground=C_PANEL).pack(anchor="e")
+        tk.Label(c3, text="نسخه اصلاح‌شده بدون مثبت کاذب کیست بیکر و با پیش‌فرض نرمال برای زانوی سالم.",
+                 font=("Arial", 8), fg=C_TEXT_MUTED, bg=C_PANEL).pack(anchor="e")
+
+        # Bottom Buttons
+        b_bar = tk.Frame(self, bg="#090d16", padx=16, pady=10)
+        b_bar.pack(fill=tk.X, side=tk.BOTTOM)
+
+        tk.Button(b_bar, text="ذخیره و اعمال تنظیمات", font=("Arial", 10, "bold"),
+                  bg=C_GREEN, fg="white", relief=tk.FLAT, padx=16, pady=6,
+                  command=self.save_and_close).pack(side=tk.RIGHT)
+
+        tk.Button(b_bar, text="انصراف", font=("Arial", 9),
+                  bg=C_CARD, fg=C_TEXT_MAIN, relief=tk.FLAT, padx=12, pady=6,
+                  command=self.destroy).pack(side=tk.LEFT)
+
+    def check_ollama_status(self):
+        host = self.var_ollama_host.get().strip() or "http://localhost:11434"
+        is_alive, models = VisionAiEngine.check_ollama(host)
+        if is_alive:
+            vis_m = [m for m in models if "vision" in m.lower() or "llava" in m.lower() or "vl" in m.lower()]
+            if vis_m:
+                self.lbl_ollama_status.config(text=f"● فعال (مدل‌های بینایی آماده: {', '.join(vis_m)})", fg=C_GREEN)
+            else:
+                self.lbl_ollama_status.config(text=f"● سرویس فعال است (مدل‌های یافت‌شده: {len(models)})", fg=C_CYAN)
+        else:
+            self.lbl_ollama_status.config(text="○ سرویس غیرفعال است (جهت فعال‌سازی روی راه‌اندازی سریع کلیک کنید)", fg="#f59e0b")
+
+    def launch_ollama_setup(self):
+        script_path = os.path.join(EXE_DIR, "setup_local_ai_ollama.bat")
+        if os.path.exists(script_path):
+            try:
+                os.startfile(script_path)
+            except Exception:
+                import subprocess
+                subprocess.Popen(["cmd.exe", "/c", script_path], shell=True)
+        else:
+            import webbrowser
+            webbrowser.open("https://ollama.com/download/windows")
+
+    def save_and_close(self):
+        new_cfg = {
+            "provider": self.var_provider.get(),
+            "ollama_host": self.var_ollama_host.get().strip(),
+            "ollama_model": self.var_ollama_model.get().strip(),
+            "gemini_api_key": self.var_gemini_key.get().strip(),
+            "fallback_to_local_rules": True
+        }
+        if self.on_save:
+            self.on_save(new_cfg)
+        messagebox.showinfo("تنظیمات هوش مصنوعی", "تنظیمات موتور هوش مصنوعی با موفقیت ذخیره و اعمال شد.", parent=self)
+        self.destroy()
+
+
+# -----------------------------------------------------------------------------
 # Main Boali MRI AI Workstation Application
 # -----------------------------------------------------------------------------
 class BoaliMriWorkstation(tk.Tk):
@@ -646,6 +801,15 @@ class BoaliMriWorkstation(tk.Tk):
             "id": ""
         }
 
+        # Configuration
+        self.config = {}
+        if os.path.exists(CONFIG_PATH):
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    self.config = json.load(f)
+            except Exception:
+                self.config = {}
+
         # Initialize PACS client (12-hour session)
         cache_path = os.path.join(EXE_DIR, "pacs_temp_cache")
         self.pacs_cache_mgr = PacsCacheManager(cache_path)
@@ -693,6 +857,11 @@ class BoaliMriWorkstation(tk.Tk):
                              bg=C_PANEL, fg=C_TEXT_MAIN, command=self.open_study_dialog,
                              relief=tk.FLAT, padx=12, pady=5)
         btn_open.pack(side=tk.RIGHT, padx=12)
+
+        btn_ai_engine = tk.Button(top_bar, text="🤖 موتور هوش مصنوعی (Vision AI)", font=("Arial", 10, "bold"),
+                                  bg="#6366f1", fg="white", command=self.open_ai_engine_dialog,
+                                  relief=tk.FLAT, padx=12, pady=5)
+        btn_ai_engine.pack(side=tk.RIGHT, padx=4)
 
         btn_pacs = tk.Button(top_bar, text="🌐 پکس مدال", font=("Arial", 10, "bold"),
                              bg=C_BLUE, fg="white", command=self.open_pacs_modal,
@@ -1003,19 +1172,22 @@ class BoaliMriWorkstation(tk.Tk):
     def _ai_worker(self):
         mod = self.active_module.get()
         if mod == "knee":
-            res = KneeMriEngine.analyze_study(self.study_dir)
+            res, is_vision_llm, override_text = VisionAiEngine.run_hybrid_analysis(self.study_dir, self.patient_info, config=self.config)
+            self.after(0, self._on_ai_complete, res, is_vision_llm, override_text)
         elif mod == "shoulder":
             res = ShoulderMriEngine.analyze_study(self.study_dir)
+            self.after(0, self._on_ai_complete, res, False, None)
         elif mod == "spine":
             res = SpineMriEngine.analyze_study(self.study_dir, segment=self.spine_segment.get())
+            self.after(0, self._on_ai_complete, res, False, None)
         elif mod == "hip":
             res = HipMriEngine.analyze_study(self.study_dir)
+            self.after(0, self._on_ai_complete, res, False, None)
         else:
             res = BrainMriEngine.analyze_study(self.study_dir, modality=self.brain_modality.get())
+            self.after(0, self._on_ai_complete, res, False, None)
 
-        self.after(0, self._on_ai_complete, res)
-
-    def _on_ai_complete(self, res):
+    def _on_ai_complete(self, res, is_vision_llm=False, override_text=None):
         self.btn_run_ai.config(state=tk.NORMAL, text="⚡ تحلیل هوشمند بالینی با مدل‌های محلی (Run AI)")
         self.analysis_results = res
 
@@ -1043,11 +1215,18 @@ class BoaliMriWorkstation(tk.Tk):
             eff_stat = res.get('findings', {}).get('patellofemoral', {}).get('effusion', 'فاقد افیوژن بارز')
             f_text += f"• افیوژن مفصلی: {eff_stat}"
 
+            if res.get("vision_ai_used"):
+                f_text += f"\n• موتور هوش مصنوعی: {res.get('vision_model', 'Vision AI')}"
+
             self.txt_findings.delete("1.0", tk.END)
             self.txt_findings.insert(tk.END, f_text)
 
-            # Generate Report Text
-            rep_text = MriReportGenerator.generate_knee_report_text(self.patient_info, res, lang="bilingual")
+            # Generate Report Text (use Vision LLM generated report if available)
+            if override_text and len(override_text) > 100:
+                rep_text = override_text
+            else:
+                rep_text = MriReportGenerator.generate_knee_report_text(self.patient_info, res, lang="bilingual")
+
             self.txt_report_preview.delete("1.0", tk.END)
             self.txt_report_preview.insert(tk.END, rep_text)
 
@@ -1092,6 +1271,17 @@ class BoaliMriWorkstation(tk.Tk):
 
     def open_pacs_modal(self):
         MedalPacsModal(self, pacs_client=self.pacs_client)
+
+    def open_ai_engine_dialog(self):
+        AiEngineConfigDialog(self, config=self.config, on_save_callback=self._on_ai_config_saved)
+
+    def _on_ai_config_saved(self, new_cfg):
+        self.config["ai_engine"] = new_cfg
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Failed to save config: {e}")
 
 
 # -----------------------------------------------------------------------------

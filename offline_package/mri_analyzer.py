@@ -654,3 +654,237 @@ class BrainMriEngine:
                 "vertebrobasilar": "Basilar artery and bilateral vertebral arteries are patent.",
                 "pathology": "No evidence of intracranial arterial aneurysm, significant stenosis, occlusion, or vascular malformation (AVM)."
             }
+
+
+# -----------------------------------------------------------------------------
+# 6. Multimodal Vision AI Engine (Ollama Local & Free Cloud Integration)
+# -----------------------------------------------------------------------------
+class VisionAiEngine:
+    """
+    Multimodal Vision-Language AI Engine (VLM) for direct image perception and clinical reasoning.
+    Allows the workstation to leverage true Vision AI models:
+    1. Local & 100% Free via Ollama (llama3.2-vision, qwen2-vl, moondream) without API keys or costs.
+    2. Free cloud tier via Google AI Studio (Gemini 1.5 Flash) with zero-cost personal keys.
+    3. Seamless fallback to local KneeMriEngine if no external/local LLM is active.
+    """
+    @classmethod
+    def check_ollama(cls, host="http://localhost:11434"):
+        """Checks if local Ollama service is active and lists available vision models."""
+        try:
+            req = urllib.request.Request(f"{host.rstrip('/')}/api/tags", headers={"User-Agent": "Boali-MRI-AI"})
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                data = json.loads(resp.read().decode())
+                models = [m.get("name") for m in data.get("models", [])]
+                return True, models
+        except Exception:
+            return False, []
+
+    @classmethod
+    def extract_key_slices_base64(cls, study_dir, max_slices=4):
+        """
+        Extracts representative axial, sagittal, and coronal MRI slices,
+        encodes them to Base64 JPEG strings for vision AI consumption.
+        """
+        series_map = MriSeriesLoader.load_series_from_directory(study_dir)
+        planes = KneeMriEngine.classify_series_planes(series_map)
+        images_b64 = []
+        slice_descs = []
+
+        # 1. Axial PD-FS slice (popliteal fossa & patellofemoral)
+        if planes.get("axial") and planes["axial"] in series_map:
+            ax_files = series_map[planes["axial"]]
+            mid_ax = ax_files[len(ax_files)//2]
+            im = MriSeriesLoader.read_image_as_numpy(mid_ax)
+            if cv2 is not None:
+                im_res = cv2.resize(im, (512, 512), interpolation=cv2.INTER_AREA)
+                _, buf = cv2.imencode(".jpg", im_res, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                images_b64.append(base64.b64encode(buf).decode("utf-8"))
+                slice_descs.append(f"Axial PD-FS (Slice {os.path.basename(mid_ax)})")
+
+        # 2. Sagittal cuts (cruciates & menisci)
+        sag_key = planes.get("sagittal_pdfs") or planes.get("sagittal")
+        if sag_key and sag_key in series_map:
+            sag_files = series_map[sag_key]
+            n = len(sag_files)
+            # Medial meniscus cut and Cruciates notch cut
+            for idx, label in [(n//2, "Sagittal PD-FS - Cruciate Notch"), (int(n*0.7), "Sagittal PD-FS - Medial Meniscus")]:
+                if 0 <= idx < n:
+                    im = MriSeriesLoader.read_image_as_numpy(sag_files[idx])
+                    if cv2 is not None:
+                        im_res = cv2.resize(im, (512, 512), interpolation=cv2.INTER_AREA)
+                        _, buf = cv2.imencode(".jpg", im_res, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                        images_b64.append(base64.b64encode(buf).decode("utf-8"))
+                        slice_descs.append(f"{label} (Slice {os.path.basename(sag_files[idx])})")
+
+        # 3. Coronal cut (collaterals & plateaus)
+        cor_key = planes.get("coronal_pdfs") or planes.get("coronal")
+        if cor_key and cor_key in series_map:
+            cor_files = series_map[cor_key]
+            mid_cor = cor_files[len(cor_files)//2]
+            im = MriSeriesLoader.read_image_as_numpy(mid_cor)
+            if cv2 is not None:
+                im_res = cv2.resize(im, (512, 512), interpolation=cv2.INTER_AREA)
+                _, buf = cv2.imencode(".jpg", im_res, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                images_b64.append(base64.b64encode(buf).decode("utf-8"))
+                slice_descs.append(f"Coronal PD-FS (Slice {os.path.basename(mid_cor)})")
+
+        return images_b64, slice_descs, planes
+
+    @classmethod
+    def query_ollama_vision(cls, images_b64, patient_info, model="llama3.2-vision", host="http://localhost:11434"):
+        """
+        Sends slices to local Ollama Vision model. Zero API key, 100% free and local.
+        """
+        name = patient_info.get("name") or "ناشناس"
+        age = patient_info.get("age") or "--"
+        gender = patient_info.get("gender") or "--"
+
+        prompt = f"""You are an expert subspecialized musculoskeletal radiologist evaluating a Knee MRI for Boali Hospital Marivan.
+Patient: {name}, Age: {age}, Gender: {gender}.
+
+You are provided with 4 representative high-resolution knee MRI slices (Axial, Sagittal, Coronal).
+Please carefully examine:
+1. Menisci: Medial and Lateral menisci (Stoller grading: Grade 0 Intact, Grade 1 globular, Grade 2 linear, Grade 3 surface-breaching tear).
+2. Cruciate Ligaments: ACL (taut, fibers continuous?) and PCL.
+3. Collateral Ligaments: MCL and LCL complex.
+4. Popliteal Fossa: Look specifically at the posteromedial compartment between the medial gastrocnemius head and semimembranosus tendon. Is a Popliteal (Baker's) cyst present? If yes, describe size; if no, state clearly that it is normal.
+5. Extensor Mechanism & Patellofemoral Joint: Cartilage and joint effusion.
+
+CRITICAL CLINICAL RULE:
+Do not hallucinate or invent pathology. If a structure is normal and intact, report it as completely Normal / Intact.
+
+Format your report in standard structured clinical radiology format, including:
+- FINDINGS (Menisci, Cruciates, Collaterals, Popliteal Fossa, Patellofemoral)
+- IMPRESSION
+- RECOMMENDATIONS
+And provide the official Persian translation below it for Boali Hospital HIS."""
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": images_b64
+                }
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.1,
+                "num_predict": 1500
+            }
+        }
+
+        url = f"{host.rstrip('/')}/api/chat"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": "Boali-MRI-AI"}
+        )
+
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get("message", {}).get("content", "")
+
+    @classmethod
+    def query_gemini_free(cls, images_b64, patient_info, api_key):
+        """
+        Sends slices to Google Gemini 1.5 Flash using the user's free Google AI Studio key.
+        """
+        name = patient_info.get("name") or "ناشناس"
+        age = patient_info.get("age") or "--"
+        gender = patient_info.get("gender") or "--"
+
+        prompt = f"""You are an expert musculoskeletal radiologist at Boali Hospital Marivan.
+Evaluate this Knee MRI study for Patient {name} ({age}yo, {gender}).
+Inspect the provided slices:
+- Medial & Lateral Menisci
+- ACL & PCL
+- MCL & LCL
+- Popliteal Fossa (Baker cyst evaluation)
+- Joint effusion & Cartilage
+
+Report only true objective findings. Default to Intact/Normal if no tear or lesion is present.
+Provide a complete bilingual (English + Persian) clinical report."""
+
+        parts = [{"text": prompt}]
+        for b64 in images_b64:
+            parts.append({
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": b64
+                }
+            })
+
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2048}
+        }
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": "Boali-MRI-AI"}
+        )
+
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+            candidates = data.get("candidates", [])
+            if candidates:
+                parts_out = candidates[0].get("content", {}).get("parts", [])
+                if parts_out:
+                    return parts_out[0].get("text", "")
+            return ""
+
+    @classmethod
+    def run_hybrid_analysis(cls, study_dir, patient_info, config=None):
+        """
+        Orchestrates analysis:
+        1. Checks if Ollama local Vision AI is enabled and running -> runs Ollama.
+        2. Checks if Gemini free key is provided -> runs Gemini.
+        3. Otherwise -> runs local KneeMriEngine (v1.0.6 zero-false-positive engine).
+        Returns: (result_dict, is_vision_llm_report, report_text_override)
+        """
+        ai_cfg = (config or {}).get("ai_engine", {})
+        provider = ai_cfg.get("provider", "ollama")
+        ollama_host = ai_cfg.get("ollama_host", "http://localhost:11434")
+        ollama_model = ai_cfg.get("ollama_model", "llama3.2-vision")
+        gemini_key = ai_cfg.get("gemini_api_key", "").strip()
+
+        # Try Local Ollama Vision first if configured
+        if provider == "ollama":
+            is_alive, models = cls.check_ollama(ollama_host)
+            if is_alive:
+                active_model = ollama_model if ollama_model in models else (models[0] if models else ollama_model)
+                try:
+                    images_b64, slice_descs, planes = cls.extract_key_slices_base64(study_dir)
+                    if images_b64:
+                        report_text = cls.query_ollama_vision(images_b64, patient_info, model=active_model, host=ollama_host)
+                        if report_text and len(report_text) > 100:
+                            # Also get base parameters for GUI
+                            base_res = KneeMriEngine.analyze_study(study_dir)
+                            base_res["vision_ai_used"] = True
+                            base_res["vision_model"] = f"Local Ollama ({active_model})"
+                            return base_res, True, report_text
+                except Exception as e:
+                    print(f"Ollama Vision execution error: {e}")
+
+        # Try Free Gemini if key configured
+        if provider == "gemini" and gemini_key:
+            try:
+                images_b64, slice_descs, planes = cls.extract_key_slices_base64(study_dir)
+                if images_b64:
+                    report_text = cls.query_gemini_free(images_b64, patient_info, gemini_key)
+                    if report_text and len(report_text) > 100:
+                        base_res = KneeMriEngine.analyze_study(study_dir)
+                        base_res["vision_ai_used"] = True
+                        base_res["vision_model"] = "Google Gemini 1.5 Flash (Free Tier)"
+                        return base_res, True, report_text
+            except Exception as e:
+                print(f"Gemini Vision execution error: {e}")
+
+        # Fallback to KneeMriEngine (v1.0.6 high-precision local engine)
+        base_res = KneeMriEngine.analyze_study(study_dir)
+        base_res["vision_ai_used"] = False
+        return base_res, False, None

@@ -1,5 +1,5 @@
 @echo off
-title Boali Hospital MRI AI Workstation (v1.0.6)
+title Boali Hospital MRI AI Workstation (v1.0.7)
 color 0b
 echo ======================================================================
 echo   پلتفرم تخصصی هوش مصنوعی و ایستگاه کاری ام‌آر‌آی بیمارستان بوعلی مریوان

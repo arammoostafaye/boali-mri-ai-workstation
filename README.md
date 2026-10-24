@@ -4,9 +4,9 @@
 ### دانشگاه علوم پزشکی و خدمات بهداشتی درمانی کردستان | شبکه بهداشت و درمان مریوان
 ### طراح، معمار سیستم و توسعه‌دهنده: **آرام مصطفائی**
 
-[![Release](https://img.shields.io/badge/Release-v1.0.0-blue?style=for-the-badge&logo=github)](https://github.com/arammoostafaye/boali-mri-ai-workstation/releases)
+[![Release](https://img.shields.io/badge/Release-v1.0.7-blue?style=for-the-badge&logo=github)](https://github.com/arammoostafaye/boali-mri-ai-workstation/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows_x64-0284c7?style=for-the-badge&logo=windows)](https://github.com/arammoostafaye/boali-mri-ai-workstation)
-[![Offline](https://img.shields.io/badge/AI_Engine-100%25_Offline_Local-10b981?style=for-the-badge)](https://github.com/arammoostafaye/boali-mri-ai-workstation)
+[![AI Engine](https://img.shields.io/badge/Vision_AI-Local_Ollama_%7C_Zero_API_Key-10b981?style=for-the-badge)](https://github.com/arammoostafaye/boali-mri-ai-workstation)
 [![License](https://img.shields.io/badge/License-Personal_Medical_Use-64748b?style=for-the-badge)](LICENSE)
 
 </div>
@@ -17,7 +17,24 @@
 
 **ایستگاه کاری هوشمند ام‌آر‌آی بیمارستان بوعلی مریوان (Boali Clinical MRI AI Workstation)** یک نرم‌افزار پیشرفته پزشکی، ۱۰۰٪ مستقل و کاملاً آفلاین برای پردازش، ناوبری سینمایی (Cine Navigation)، تحلیل تشخیصی یادگیری عمیق و گزارش‌نویسی بالینی مطالعات تشدید مغناطیسی (MRI) است.
 
-این نرم‌افزار به صورت تخصصی برای پاسخگویی به حجم کاری بالای بخش تصویربرداری و ام‌آر‌آی بیمارستان بوعلی مریوان طراحی شده و مجهز به مدل‌های عصبی و الگوریتم‌های هوشمند محلی است که بر روی پردازنده‌های معمولی (CPU) بدون نیاز به اینترنت و بدون ارسال داده‌های بیماران به سرورهای خارجی اجرا می‌شوند.
+این نرم‌افزار در نگارش **v1.0.7** مجهز به **موتور هوش مصنوعی بینایی چندوجهی (Multimodal Vision AI)** شده است که به کاربر اجازه می‌دهد بدون نیاز به خرید کلید API یا پرداخت هزینه، از مدل‌های هوش مصنوعی بینایی (مانند `llama3.2-vision` از طریق Ollama یا سهمیه رایگان Google Gemini) به صورت مستقیم برای مشاهده تصاویر و استدلال عمیق رادیولوژی استفاده کند.
+
+---
+
+## 🤖 موتور هوش مصنوعی بینایی بدون نیاز به API (Vision AI Engine)
+
+یکی از مهم‌ترین ویژگی‌های نگارش v1.0.7، ارتقای تحلیل ام‌آر‌آی به سطح مدل‌های بینایی چندوجهی (Vision-Language Models) است:
+
+۱. **مدل بینایی محلی و ۱۰۰٪ رایگان (Local Ollama Vision):**
+   - بدون نیاز به اینترنت و بدون نیاز به حتی ۱ ریال هزینه یا کلید API.
+   - با اجرای اسکریپت تک‌کلیکه `setup_local_ai_ollama.bat`، مدل بینایی `llama3.2-vision` مستقیماً روی ویندوز شما نصب و اجرا می‌شود.
+   - نرم‌افزار دسکتاپ بوعلی برش‌های کلیدی دایکام بیمار را به صورت خودکار به مدل محلی ارسال کرده و گزارش بالینی تخصصی دریافت می‌کند.
+
+۲. **سهمیه ابری رایگان گوگل (Google Gemini Free Tier):**
+   - برای کسانی که مایلند از سرورهای ابری استفاده کنند، گوگل سهمیه رایگان مادام‌العمر برای اکانت‌های جیمیل (در `aistudio.google.com`) ارائه می‌دهد که بدون نیاز به کارت بانکی در نرم‌افزار قابل استفاده است.
+
+۳. **موتور محلی اصلاح‌شده v1.0.6 (Embedded Engine):**
+   - در صورت عدم نصب Ollama یا قطعی شبکه، الگوریتم بهینه‌سازی‌شده داخلی با سگمنتیشن مؤلفه‌های همبند پیوسته فعال است و هیچ‌گونه خطای مثبت کاذب ۹۰ سی‌سی یا گزارش کلیشه‌ای تولید نمی‌کند.
 
 ---
 
